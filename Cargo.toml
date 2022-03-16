@@ -2,6 +2,12 @@
 name = "midi-sniffer"
 version = "0.1.0"
 authors = ["François Laignel <fengalin@free.fr>"]
+categories = ["Multimedia"]
+keywords = ["midi", "sniffer", "analyzer", "gui"]
+description = "MIDI messages sniffer"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/fengalin/midi-sniffer"
 edition = "2021"
 
 [dependencies]
