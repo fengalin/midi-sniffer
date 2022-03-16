@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::midi;
+
 const MSG_POLLING_INTERVAL: Duration = Duration::from_millis(20);
 const MSG_LIST_BATCH_SIZE: usize = 5;
 const MAX_MSG_BATCHES_PER_UPDATE: usize = 30 / MSG_LIST_BATCH_SIZE;
@@ -15,19 +17,19 @@ pub enum Error {
     #[error("MIDI Sniffer error: {}", 0)]
     Midi(#[from] crate::SnifferError),
 
-    #[error("MIDI Message parsing error: {}", 0)]
-    Parse(#[from] midi_msg::ParseError),
+    #[error("MIDI Message error: {}", 0)]
+    Parse(#[from] crate::MidiMsgError),
 }
 
 enum Request {
-    Connect(Arc<str>),
-    Disconnect,
+    Connect((midi::PortNb, Arc<str>)),
+    Disconnect(midi::PortNb),
     HaveFrame(epi::Frame),
     RefreshPorts,
     Shutdown,
 }
 
-pub type MidiMsgParseResult = Result<crate::MidiMsg, (u64, Error)>;
+pub type MidiMsgParseResult = Result<crate::MidiMsg, crate::MidiMsgError>;
 
 pub struct Sniffer {
     msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
@@ -84,12 +86,14 @@ impl Sniffer {
         self.to_tx.send(Request::RefreshPorts).unwrap();
     }
 
-    pub fn connect(&self, port_name: Arc<str>) {
-        self.to_tx.send(Request::Connect(port_name)).unwrap();
+    pub fn connect(&self, port_nb: midi::PortNb, port_name: Arc<str>) {
+        self.to_tx
+            .send(Request::Connect((port_nb, port_name)))
+            .unwrap();
     }
 
-    pub fn disconnect(&self) {
-        self.to_tx.send(Request::Disconnect).unwrap();
+    pub fn disconnect(&self, port_nb: midi::PortNb) {
+        self.to_tx.send(Request::Disconnect(port_nb)).unwrap();
     }
 
     pub fn have_frame(&self, frame: epi::Frame) {
@@ -155,19 +159,18 @@ impl SnifferController {
     fn handle_request(&mut self, request: Request) -> Result<ControlFlow<(), ()>, Error> {
         use self::Request::*;
         match request {
-            Connect(port_name) => {
-                let res = self.connect(port_name);
+            Connect((port_nb, port_name)) => {
+                self.connect(port_nb, port_name)?;
                 self.refresh_ports();
-                res?;
             }
-            Disconnect => self
-                .sniffer
-                .disconnect()
-                .map(|_| self.is_connected = false)?,
-            RefreshPorts => {
-                let res = self.sniffer.refresh_ports();
+            Disconnect(port_nb) => {
+                self.sniffer.disconnect(port_nb)?;
+                self.is_connected = false;
                 self.refresh_ports();
-                res?;
+            }
+            RefreshPorts => {
+                self.sniffer.refresh_ports()?;
+                self.refresh_ports();
             }
             Shutdown => return Ok(ControlFlow::Break(())),
             HaveFrame(egui_frame) => {
@@ -178,17 +181,22 @@ impl SnifferController {
         Ok(ControlFlow::Continue(()))
     }
 
-    fn connect(&mut self, port_name: Arc<str>) -> Result<(), Error> {
+    fn connect(&mut self, port_nb: midi::PortNb, port_name: Arc<str>) -> Result<(), Error> {
         let msg_tx = self.msg_tx.clone();
         self.sniffer.connect(
+            port_nb,
             port_name,
             move |ts, buf| match midi_msg::MidiMsg::from_midi(buf) {
                 Ok((msg, _len)) => {
-                    msg_tx.send(Ok(crate::MidiMsg { ts, msg })).unwrap();
+                    msg_tx
+                        .send(Ok(crate::MidiMsg { ts, port_nb, msg }))
+                        .unwrap();
                 }
                 Err(err) => {
                     log::error!("Failed to parse Midi buffer: {}", err);
-                    msg_tx.send(Err((ts, err.into()))).unwrap();
+                    msg_tx
+                        .send(Err(crate::MidiMsgError { ts, port_nb, err }))
+                        .unwrap();
                 }
             },
         )?;
@@ -204,7 +212,7 @@ impl SnifferController {
         let ports_widget = self.ports_widget.clone();
         let mut ports_widget = ports_widget.lock().unwrap();
         for port_name in ports_widget.ins.ports.iter() {
-            if self.connect(port_name.clone()).is_ok() {
+            if self.connect(midi::PortNb::One, port_name.clone()).is_ok() {
                 ports_widget.update_from(&self.sniffer.ports);
                 break;
             }
@@ -237,12 +245,8 @@ impl SnifferController {
                 break;
             }
 
-            self.must_repaint = self
-                .msg_list_widget
-                .lock()
-                .unwrap()
-                .extend(msg_batch_iter)
-                .was_updated();
+            self.must_repaint =
+                { self.msg_list_widget.lock().unwrap().extend(msg_batch_iter) }.was_updated();
         }
 
         match request {

@@ -1,21 +1,29 @@
 use eframe::egui;
-use std::fmt::Write;
+use std::fmt;
+
+use crate::midi::{self, PortNb};
 
 const MAX_REPETITIONS: u8 = 99;
 const MAX_REPETITIONS_EXCEEDED: &str = ">99";
 
 pub struct MsgParseResult {
-    ts: String,
+    ts_str: String,
+    port_nb: PortNb,
     repetitions: u8,
-    displayable: String,
-    res: Result<midi_msg::MidiMsg, super::sniffer::Error>,
+    res_str: String,
+    res: Result<crate::MidiMsg, crate::MidiMsgError>,
 }
 
 impl PartialEq<super::sniffer::MidiMsgParseResult> for MsgParseResult {
     fn eq(&self, other: &super::sniffer::MidiMsgParseResult) -> bool {
         match (&self.res, other) {
-            (Ok(s), Ok(o)) => s.eq(&o.msg),
-            (Err(_), Err((_, oerr))) if self.displayable == format!("{oerr}") => true,
+            (Ok(s), Ok(o)) => s.port_nb == o.port_nb && s.msg.eq(&o.msg),
+            (Err(s), Err(o)) => {
+                // FIXME would be great to be able compare errors without
+                // matching on the string but midi_msg::ParseError
+                // doesn't impl PartialEq
+                s.port_nb == o.port_nb && self.res_str == format!("{}", o.err)
+            }
             _ => false,
         }
     }
@@ -25,21 +33,23 @@ impl From<super::sniffer::MidiMsgParseResult> for MsgParseResult {
     fn from(res: super::sniffer::MidiMsgParseResult) -> Self {
         match res {
             Ok(msg) => {
-                let mut displayable = String::new();
-                write_midi_msg(&mut displayable, &msg.msg).unwrap();
+                let mut res_str = String::new();
+                write_midi_msg(&mut res_str, &msg.msg).unwrap();
 
                 Self {
-                    ts: format!("{}", msg.ts),
+                    ts_str: format!("{}", msg.ts),
+                    port_nb: msg.port_nb,
                     repetitions: 1,
-                    displayable,
-                    res: Ok(msg.msg),
+                    res_str,
+                    res: Ok(msg),
                 }
             }
-            Err((ts, err)) => Self {
-                ts: format!("{ts}"),
+            Err(msg_err) => Self {
+                ts_str: format!("{}", msg_err.ts),
+                port_nb: msg_err.port_nb,
                 repetitions: 1,
-                displayable: format!("{err}"),
-                res: Err(err),
+                res_str: format!("{}", msg_err.err),
+                res: Err(msg_err),
             },
         }
     }
@@ -60,45 +70,84 @@ impl Status {
     }
 }
 
-#[derive(Default)]
 pub struct MsgListWidget {
     pub list: Vec<MsgParseResult>,
+    follows_cursor: bool,
+}
+
+impl Default for MsgListWidget {
+    fn default() -> Self {
+        Self {
+            list: Vec::new(),
+            follows_cursor: true,
+        }
+    }
 }
 
 impl MsgListWidget {
-    pub fn show(&self, ui: &mut egui::Ui) {
-        // FIXME find a way to auto scroll
-        egui::ScrollArea::both().show(ui, |ui| {
-            egui::Grid::new("Msg List").show(ui, |ui| {
-                ui.label("Timestamp");
-                ui.label("Rep.");
-                ui.label("Message");
-                ui.end_row();
-
-                ui.separator();
-                ui.separator();
-                ui.separator();
-                ui.end_row();
-
-                for msg in self.list.iter() {
-                    let _ = ui.selectable_label(false, &msg.ts);
-
-                    if msg.repetitions == 1 {
-                        let _ = ui.selectable_label(false, "");
-                    } else if msg.repetitions > MAX_REPETITIONS {
-                        let _ = ui.selectable_label(false, MAX_REPETITIONS_EXCEEDED);
-                    } else {
-                        let _ = ui.selectable_label(false, &format!("x{}", msg.repetitions));
-                    };
-
-                    if msg.res.is_err() {
-                        let _ = ui.colored_label(egui::Color32::RED, &msg.displayable);
-                    } else {
-                        let _ = ui.selectable_label(false, &msg.displayable);
-                    }
-                    ui.end_row();
+    pub fn show(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.follows_cursor, "Follow");
+                if ui.button("Clear").clicked() {
+                    self.list.clear();
                 }
             });
+
+            ui.separator();
+            egui::ScrollArea::both().show(ui, |ui| {
+                egui::Grid::new("Msg List").num_columns(4).show(ui, |ui| {
+                    ui.label("Timestamp");
+                    ui.label("Port");
+                    ui.label("Rep.");
+                    ui.label("Message");
+                    ui.end_row();
+
+                    ui.separator();
+                    ui.separator();
+                    ui.separator();
+                    ui.separator();
+                    ui.end_row();
+
+                    for msg in self.list.iter() {
+                        let row_color = match msg.port_nb {
+                            midi::PortNb::One => egui::Color32::from_rgb(0, 0, 0x64),
+                            midi::PortNb::Two => egui::Color32::from_rgb(0, 0x48, 0),
+                        };
+
+                        let _ = ui.selectable_label(false, &msg.ts_str);
+
+                        let _ = ui.selectable_label(
+                            false,
+                            egui::RichText::new(msg.port_nb.as_char())
+                                .color(egui::Color32::WHITE)
+                                .background_color(row_color),
+                        );
+
+                        let repetitions: egui::WidgetText = if msg.repetitions == 1 {
+                            "".into()
+                        } else if msg.repetitions > MAX_REPETITIONS {
+                            MAX_REPETITIONS_EXCEEDED.into()
+                        } else {
+                            format!("x{}", msg.repetitions).into()
+                        };
+                        let _ = ui.selectable_label(false, repetitions);
+
+                        let msg_txt = egui::RichText::new(&msg.res_str).color(egui::Color32::WHITE);
+                        let msg_txt = if msg.res.is_ok() {
+                            msg_txt.background_color(row_color)
+                        } else {
+                            msg_txt.background_color(egui::Color32::DARK_RED)
+                        };
+                        let _ = ui.selectable_label(false, msg_txt);
+                        ui.end_row();
+                    }
+                });
+
+                if self.follows_cursor {
+                    ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                }
+            })
         });
     }
 
@@ -128,7 +177,10 @@ impl MsgListWidget {
     }
 }
 
-fn write_chan_voice_msg(w: &mut dyn Write, msg: &midi_msg::ChannelVoiceMsg) -> std::fmt::Result {
+fn write_chan_voice_msg(
+    w: &mut dyn fmt::Write,
+    msg: &midi_msg::ChannelVoiceMsg,
+) -> std::fmt::Result {
     use midi_msg::ChannelVoiceMsg::*;
     match msg {
         NoteOn {
@@ -150,7 +202,7 @@ fn write_chan_voice_msg(w: &mut dyn Write, msg: &midi_msg::ChannelVoiceMsg) -> s
     }
 }
 
-fn write_poly_mode(w: &mut dyn Write, pm: &midi_msg::PolyMode) -> std::fmt::Result {
+fn write_poly_mode(w: &mut dyn fmt::Write, pm: &midi_msg::PolyMode) -> std::fmt::Result {
     use midi_msg::PolyMode::*;
     match pm {
         Mono(n_chans) => write!(w, "Mono {} chan(s)", n_chans),
@@ -158,7 +210,7 @@ fn write_poly_mode(w: &mut dyn Write, pm: &midi_msg::PolyMode) -> std::fmt::Resu
     }
 }
 
-fn write_chan_mode_msg(w: &mut dyn Write, msg: &midi_msg::ChannelModeMsg) -> std::fmt::Result {
+fn write_chan_mode_msg(w: &mut dyn fmt::Write, msg: &midi_msg::ChannelModeMsg) -> std::fmt::Result {
     use midi_msg::ChannelModeMsg::*;
     match msg {
         AllSoundOff => w.write_str("All Sound Off"),
@@ -173,7 +225,7 @@ fn write_chan_mode_msg(w: &mut dyn Write, msg: &midi_msg::ChannelModeMsg) -> std
     }
 }
 
-fn write_time_code_type(w: &mut dyn Write, tct: &midi_msg::TimeCodeType) -> std::fmt::Result {
+fn write_time_code_type(w: &mut dyn fmt::Write, tct: &midi_msg::TimeCodeType) -> std::fmt::Result {
     use midi_msg::TimeCodeType::*;
     w.write_str(match tct {
         FPS24 => "24 FPS",
@@ -183,7 +235,7 @@ fn write_time_code_type(w: &mut dyn Write, tct: &midi_msg::TimeCodeType) -> std:
     })
 }
 
-fn write_time_code(w: &mut dyn Write, tc: &midi_msg::TimeCode) -> std::fmt::Result {
+fn write_time_code(w: &mut dyn fmt::Write, tc: &midi_msg::TimeCode) -> std::fmt::Result {
     write!(
         w,
         "{} frame(s) {}:{}:{} ",
@@ -192,7 +244,7 @@ fn write_time_code(w: &mut dyn Write, tc: &midi_msg::TimeCode) -> std::fmt::Resu
     write_time_code_type(w, &tc.code_type)
 }
 
-fn write_sys_com_msg(w: &mut dyn Write, msg: &midi_msg::SystemCommonMsg) -> std::fmt::Result {
+fn write_sys_com_msg(w: &mut dyn fmt::Write, msg: &midi_msg::SystemCommonMsg) -> std::fmt::Result {
     use midi_msg::SystemCommonMsg::*;
     match msg {
         TimeCodeQuarterFrame1(tc) => {
@@ -233,7 +285,7 @@ fn write_sys_com_msg(w: &mut dyn Write, msg: &midi_msg::SystemCommonMsg) -> std:
     }
 }
 
-fn write_sys_rt_msg(w: &mut dyn Write, msg: &midi_msg::SystemRealTimeMsg) -> std::fmt::Result {
+fn write_sys_rt_msg(w: &mut dyn fmt::Write, msg: &midi_msg::SystemRealTimeMsg) -> std::fmt::Result {
     use midi_msg::SystemRealTimeMsg::*;
     w.write_str(match msg {
         TimingClock => "Timing Clock",
@@ -246,7 +298,7 @@ fn write_sys_rt_msg(w: &mut dyn Write, msg: &midi_msg::SystemRealTimeMsg) -> std
 }
 
 fn write_universal_rt_msg(
-    w: &mut dyn Write,
+    w: &mut dyn fmt::Write,
     msg: &midi_msg::UniversalRealTimeMsg,
 ) -> std::fmt::Result {
     use midi_msg::UniversalRealTimeMsg::*;
@@ -267,7 +319,7 @@ fn write_universal_rt_msg(
     }
 }
 
-fn write_sysex_msg(w: &mut dyn Write, msg: &midi_msg::SystemExclusiveMsg) -> std::fmt::Result {
+fn write_sysex_msg(w: &mut dyn fmt::Write, msg: &midi_msg::SystemExclusiveMsg) -> std::fmt::Result {
     use midi_msg::SystemExclusiveMsg::*;
     match msg {
         Commercial { id, data } => write!(w, "{:?} {:?}", id, data),
@@ -280,7 +332,7 @@ fn write_sysex_msg(w: &mut dyn Write, msg: &midi_msg::SystemExclusiveMsg) -> std
     }
 }
 
-fn write_midi_msg(w: &mut dyn Write, msg: &midi_msg::MidiMsg) -> std::fmt::Result {
+fn write_midi_msg(w: &mut dyn fmt::Write, msg: &midi_msg::MidiMsg) -> std::fmt::Result {
     use midi_msg::MidiMsg::*;
     match msg {
         ChannelVoice { channel, msg } => {

@@ -27,41 +27,53 @@ impl epi::App for Main {
         self.sniffer.have_frame(frame.clone());
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &epi::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("MIDI Sniffer");
+
             ui.add_space(10f32);
 
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     use super::port;
-                    let resp = self.sniffer.ports_widget().show(ui);
+                    use crate::midi::PortNb;
+
+                    let mut resp = self.sniffer.ports_widget().show(PortNb::One, ui);
+
+                    if ui.button("Refresh Ports").clicked() {
+                        self.sniffer.refresh_ports();
+                    }
+
+                    let resp2 = self.sniffer.ports_widget().show(PortNb::Two, ui);
+                    if resp2.is_some() {
+                        resp = resp2;
+                    }
+
                     match resp {
-                        Some(port::Response::Connect(port_name)) => {
-                            self.sniffer.connect(port_name);
+                        Some(port::Response::Connect((port_nb, port_name))) => {
+                            self.sniffer.connect(port_nb, port_name);
                         }
-                        Some(port::Response::Disconnect) => {
-                            self.sniffer.disconnect();
+                        Some(port::Response::Disconnect(port_nb)) => {
+                            self.sniffer.disconnect(port_nb);
                         }
                         None => (),
                     }
-
-                    if ui.button("Refresh ports").clicked() {
-                        self.sniffer.refresh_ports();
-                    }
                 });
 
+                ui.add_space(2f32);
                 ui.separator();
+                ui.add_space(2f32);
+
                 self.sniffer.msg_list_widget().show(ui);
-
-                if let Some(err) = self.sniffer.pop_error() {
-                    ui.separator();
-                    ui.label(&format!("An error occured: {}", err));
-                }
             });
-        });
 
-        frame.set_window_size(ctx.used_size());
+            if let Some(err) = self.sniffer.pop_error() {
+                ui.add_space(5f32);
+                ui.group(|ui| {
+                    ui.label(&format!("An error occured: {}", err));
+                });
+            }
+        });
     }
 
     fn on_exit(&mut self) {

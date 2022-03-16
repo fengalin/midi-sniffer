@@ -1,8 +1,8 @@
 pub mod midi;
-pub use midi::MidiIn;
+pub use midi::{MidiIn, MidiMsg, MidiMsgError};
 
 pub mod sniffer;
-pub use sniffer::{MidiMsg, Sniffer, SnifferError};
+pub use sniffer::{Sniffer, SnifferError};
 
 mod ui;
 

@@ -23,25 +23,28 @@ pub enum SnifferError {
     PortNotFound(Arc<str>),
 }
 
-#[derive(Debug)]
-pub struct MidiMsg {
-    pub ts: u64,
-    pub msg: midi_msg::MidiMsg,
-}
-
 pub struct Sniffer {
-    midi_in: crate::MidiIn,
+    midi_in: [crate::MidiIn; 2],
     pub ports: midi::Ports,
 }
 
 impl Sniffer {
     pub fn try_new(client_name: &str) -> Result<Self, SnifferError> {
-        let midi_in = crate::MidiIn::new(client_name)?;
+        let midi_in1 = crate::MidiIn::new(client_name)?;
 
         let mut ports = midi::Ports::new(client_name);
-        ports.update(midi_in.io().unwrap())?;
+        ports.update(midi_in1.io().unwrap())?;
 
-        Ok(Self { midi_in, ports })
+        let midi_in2 = crate::MidiIn::new(client_name)?;
+
+        Ok(Self {
+            midi_in: [midi_in1, midi_in2],
+            ports,
+        })
+    }
+
+    pub fn midi_in_mut(&mut self, port_nb: midi::PortNb) -> &mut crate::MidiIn {
+        &mut self.midi_in[port_nb.idx()]
     }
 
     pub fn refresh_ports(&mut self) -> Result<(), SnifferError> {
@@ -53,7 +56,12 @@ impl Sniffer {
         Ok(())
     }
 
-    pub fn connect<C>(&mut self, port_name: Arc<str>, callback: C) -> Result<(), SnifferError>
+    pub fn connect<C>(
+        &mut self,
+        port_nb: midi::PortNb,
+        port_name: Arc<str>,
+        callback: C,
+    ) -> Result<(), SnifferError>
     where
         C: Fn(u64, &[u8]) + Send + 'static,
     {
@@ -61,22 +69,24 @@ impl Sniffer {
             .ports
             .ins
             .get(&port_name)
-            .ok_or_else(|| SnifferError::PortNotFound(port_name.clone()))?;
+            .ok_or_else(|| SnifferError::PortNotFound(port_name.clone()))?
+            .clone();
 
-        self.midi_in
-            .connect(port, &format!("{} Input", self.ports.client_name), callback)
+        let app_port_name = format!("{} {}", self.ports.client_name, port_nb);
+        self.midi_in_mut(port_nb)
+            .connect(port_name.clone(), &port, &app_port_name, callback)
             .map_err(|_| {
-                self.ports.ins.disconnected();
+                self.ports.ins.disconnected(port_nb);
                 SnifferError::PortConnection
             })?;
-        self.ports.ins.connected(port_name);
+        self.ports.ins.connected(port_nb, port_name);
 
         Ok(())
     }
 
-    pub fn disconnect(&mut self) -> Result<(), SnifferError> {
-        self.midi_in.disconnect();
-        self.ports.ins.disconnected();
+    pub fn disconnect(&mut self, port_nb: midi::PortNb) -> Result<(), SnifferError> {
+        self.midi_in_mut(port_nb).disconnect();
+        self.ports.ins.disconnected(port_nb);
 
         Ok(())
     }
