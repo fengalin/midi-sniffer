@@ -15,23 +15,20 @@ Clone the git tree and run the following command in an environment where
 `cargo` is available:
 
 ```
-cargo b --release --no-default-features
+cargo b --release
 ```
 
 This will compile the executable **without** `jack` support. If you need `jack`
 support, use the following command:
 
 ```
-cargo b --release
+cargo b --release --features=jack
 ```
 
-**Note 1:** `jack` support requires development libraries and headers to be
+**Note:** `jack` support requires development libraries and headers to be
 available in your compilation environment. On Unix-like systems, the package
 should look like `jack-audio-connection-kit-devel` or
 `pipewire-jack-audio-connection-kit-devel`.
-
-**Note 2:** `jack` is activated by default because I need it for my main use
-case.
 
 ## Run
 

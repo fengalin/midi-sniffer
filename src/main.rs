@@ -1,8 +1,5 @@
 pub mod midi;
-pub use midi::{MidiIn, MidiMsg, MidiMsgError};
-
-pub mod sniffer;
-pub use sniffer::{Sniffer, SnifferError};
+pub use midi::MidiIn;
 
 mod ui;
 
@@ -13,7 +10,7 @@ fn main() {
         .filter_level(log::LevelFilter::Debug)
         .init();
 
-    match ui::Main::try_new(APP_NAME).map(|ui| {
+    match ui::App::try_new(APP_NAME).map(|ui| {
         let options = eframe::NativeOptions::default();
         eframe::run_native(Box::new(ui), options);
     }) {

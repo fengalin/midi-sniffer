@@ -1,8 +1,8 @@
 use crossbeam_channel as channel;
-use eframe::epi;
+use eframe::{egui, epi};
 use std::{
     ops::ControlFlow,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -14,11 +14,11 @@ const MAX_MSG_BATCHES_PER_UPDATE: usize = 30 / MSG_LIST_BATCH_SIZE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("MIDI Sniffer error: {}", 0)]
-    Midi(#[from] crate::SnifferError),
+    #[error("MIDI error: {}", 0)]
+    Midi(#[from] super::port::Error),
 
     #[error("MIDI Message error: {}", 0)]
-    Parse(#[from] crate::MidiMsgError),
+    Parse(#[from] crate::midi::msg::Error),
 }
 
 enum Request {
@@ -29,9 +29,7 @@ enum Request {
     Shutdown,
 }
 
-pub type MidiMsgParseResult = Result<crate::MidiMsg, crate::MidiMsgError>;
-
-pub struct Sniffer {
+pub struct App {
     msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
     to_tx: channel::Sender<Request>,
     from_rx: channel::Receiver<Error>,
@@ -39,26 +37,18 @@ pub struct Sniffer {
     controller_thread: Option<std::thread::JoinHandle<()>>,
 }
 
-impl Sniffer {
+impl App {
     pub fn try_new(client_name: &str) -> Result<Self, Error> {
         let (from_tx, from_rx) = channel::unbounded();
         let (to_tx, to_rx) = channel::unbounded();
 
-        let sniffer = crate::Sniffer::try_new(client_name)?;
+        let ports_widget = Arc::new(Mutex::new(super::PortsWidget::try_new(client_name)?));
         let msg_list_widget = Arc::new(Mutex::new(super::MsgListWidget::default()));
-        let ports_widget = Arc::new(Mutex::new(super::PortsWidget::new(&sniffer.ports)));
 
         let msg_list_widget_clone = msg_list_widget.clone();
         let ports_widget_clone = ports_widget.clone();
         let controller_thread = std::thread::spawn(move || {
-            SnifferController::new(
-                sniffer,
-                to_rx,
-                from_tx,
-                msg_list_widget_clone,
-                ports_widget_clone,
-            )
-            .run()
+            AppController::new(to_rx, from_tx, msg_list_widget_clone, ports_widget_clone).run()
         });
 
         Ok(Self {
@@ -71,7 +61,76 @@ impl Sniffer {
     }
 }
 
-impl Sniffer {
+impl epi::App for App {
+    fn name(&self) -> &str {
+        "MIDI Sniffer"
+    }
+
+    fn setup(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &epi::Frame,
+        _storage: Option<&dyn epi::Storage>,
+    ) {
+        ctx.set_visuals(egui::Visuals::dark());
+        self.have_frame(frame.clone());
+    }
+
+    fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("MIDI Sniffer");
+
+            ui.add_space(10f32);
+
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    use super::port;
+                    use crate::midi::PortNb;
+
+                    let mut resp = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
+
+                    if ui.button("Refresh Ports").clicked() {
+                        self.refresh_ports();
+                    }
+
+                    let resp2 = self.ports_widget.lock().unwrap().show(PortNb::Two, ui);
+                    if resp2.is_some() {
+                        resp = resp2;
+                    }
+
+                    match resp {
+                        Some(port::Response::Connect((port_nb, port_name))) => {
+                            self.connect(port_nb, port_name);
+                        }
+                        Some(port::Response::Disconnect(port_nb)) => {
+                            self.disconnect(port_nb);
+                        }
+                        None => (),
+                    }
+                });
+
+                ui.add_space(2f32);
+                ui.separator();
+                ui.add_space(2f32);
+
+                self.msg_list_widget.lock().unwrap().show(ui);
+            });
+
+            if let Some(err) = self.pop_error() {
+                ui.add_space(5f32);
+                ui.group(|ui| {
+                    ui.label(&format!("An error occured: {}", err));
+                });
+            }
+        });
+    }
+
+    fn on_exit(&mut self) {
+        self.shutdown();
+    }
+}
+
+impl App {
     pub fn shutdown(&mut self) {
         if let Some(controller_thread) = self.controller_thread.take() {
             if let Err(err) = self.to_tx.send(Request::Shutdown) {
@@ -99,16 +158,6 @@ impl Sniffer {
     pub fn have_frame(&self, frame: epi::Frame) {
         self.to_tx.send(Request::HaveFrame(frame)).unwrap();
     }
-}
-
-impl Sniffer {
-    pub fn msg_list_widget(&self) -> MutexGuard<'_, super::MsgListWidget> {
-        self.msg_list_widget.lock().unwrap()
-    }
-
-    pub fn ports_widget(&self) -> MutexGuard<'_, super::PortsWidget> {
-        self.ports_widget.lock().unwrap()
-    }
 
     pub fn pop_error(&self) -> Option<Error> {
         match self.from_rx.try_recv() {
@@ -119,11 +168,9 @@ impl Sniffer {
     }
 }
 
-struct SnifferController {
-    sniffer: crate::Sniffer,
-    is_connected: bool,
-    msg_rx: channel::Receiver<MidiMsgParseResult>,
-    msg_tx: channel::Sender<MidiMsgParseResult>,
+struct AppController {
+    msg_rx: channel::Receiver<midi::msg::Result>,
+    msg_tx: channel::Sender<midi::msg::Result>,
     to_rx: channel::Receiver<Request>,
     from_tx: channel::Sender<Error>,
     msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
@@ -132,9 +179,8 @@ struct SnifferController {
     frame: Option<epi::Frame>,
 }
 
-impl SnifferController {
+impl AppController {
     fn new(
-        sniffer: crate::Sniffer,
         to_rx: channel::Receiver<Request>,
         from_tx: channel::Sender<Error>,
         msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
@@ -143,8 +189,6 @@ impl SnifferController {
         let (msg_tx, msg_rx) = channel::unbounded();
 
         Self {
-            sniffer,
-            is_connected: false,
             msg_rx,
             msg_tx,
             to_rx,
@@ -161,16 +205,12 @@ impl SnifferController {
         match request {
             Connect((port_nb, port_name)) => {
                 self.connect(port_nb, port_name)?;
-                self.refresh_ports();
             }
             Disconnect(port_nb) => {
-                self.sniffer.disconnect(port_nb)?;
-                self.is_connected = false;
-                self.refresh_ports();
+                self.ports_widget.lock().unwrap().disconnect(port_nb)?;
             }
             RefreshPorts => {
-                self.sniffer.refresh_ports()?;
-                self.refresh_ports();
+                self.ports_widget.lock().unwrap().refresh_ports()?;
             }
             Shutdown => return Ok(ControlFlow::Break(())),
             HaveFrame(egui_frame) => {
@@ -182,58 +222,15 @@ impl SnifferController {
     }
 
     fn connect(&mut self, port_nb: midi::PortNb, port_name: Arc<str>) -> Result<(), Error> {
-        let msg_tx = self.msg_tx.clone();
-        self.sniffer.connect(
-            port_nb,
-            port_name,
-            move |ts, buf| match midi_msg::MidiMsg::from_midi(buf) {
-                Ok((msg, _len)) => {
-                    msg_tx
-                        .send(Ok(crate::MidiMsg { ts, port_nb, msg }))
-                        .unwrap();
-                }
-                Err(err) => {
-                    log::error!("Failed to parse Midi buffer: {}", err);
-                    msg_tx
-                        .send(Err(crate::MidiMsgError { ts, port_nb, err }))
-                        .unwrap();
-                }
-            },
-        )?;
-
-        self.is_connected = true;
-        Ok(())
-    }
-
-    fn auto_connect(&mut self) {
-        // Auto-connect to first available port
-        // FIXME save the last connected port and try to connect it again on startup
-
-        let ports_widget = self.ports_widget.clone();
-        let mut ports_widget = ports_widget.lock().unwrap();
-        for port_name in ports_widget.ins.ports.iter() {
-            if self.connect(midi::PortNb::One, port_name.clone()).is_ok() {
-                ports_widget.update_from(&self.sniffer.ports);
-                break;
-            }
-        }
-    }
-
-    fn refresh_ports(&self) {
         self.ports_widget
             .lock()
             .unwrap()
-            .update_from(&self.sniffer.ports);
+            .connect(port_nb, port_name, self.msg_tx.clone())?;
+
+        Ok(())
     }
 
     fn try_receive_request(&mut self) -> Option<Request> {
-        if !self.is_connected {
-            match self.to_rx.recv() {
-                Ok(request) => return Some(request),
-                Err(err) => panic!("{}", err),
-            }
-        }
-
         let request = self
             .to_rx
             .recv_deadline(Instant::now() + MSG_POLLING_INTERVAL);
@@ -257,7 +254,10 @@ impl SnifferController {
     }
 
     fn run(mut self) {
-        self.auto_connect();
+        self.ports_widget
+            .lock()
+            .unwrap()
+            .auto_connect(self.msg_tx.clone());
 
         loop {
             if let Some(request) = self.try_receive_request() {

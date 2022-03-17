@@ -11,11 +11,11 @@ pub struct MsgParseResult {
     port_nb: PortNb,
     repetitions: u8,
     res_str: String,
-    res: Result<crate::MidiMsg, crate::MidiMsgError>,
+    res: Result<midi::msg::Msg, midi::msg::Error>,
 }
 
-impl PartialEq<super::sniffer::MidiMsgParseResult> for MsgParseResult {
-    fn eq(&self, other: &super::sniffer::MidiMsgParseResult) -> bool {
+impl PartialEq<midi::msg::Result> for MsgParseResult {
+    fn eq(&self, other: &midi::msg::Result) -> bool {
         match (&self.res, other) {
             (Ok(s), Ok(o)) => s.port_nb == o.port_nb && s.msg.eq(&o.msg),
             (Err(s), Err(o)) => {
@@ -29,8 +29,8 @@ impl PartialEq<super::sniffer::MidiMsgParseResult> for MsgParseResult {
     }
 }
 
-impl From<super::sniffer::MidiMsgParseResult> for MsgParseResult {
-    fn from(res: super::sniffer::MidiMsgParseResult) -> Self {
+impl From<midi::msg::Result> for MsgParseResult {
+    fn from(res: midi::msg::Result) -> Self {
         match res {
             Ok(msg) => {
                 let mut res_str = String::new();
@@ -152,10 +152,7 @@ impl MsgListWidget {
     }
 
     #[must_use]
-    pub fn extend(
-        &mut self,
-        msg_iter: impl Iterator<Item = super::sniffer::MidiMsgParseResult>,
-    ) -> Status {
+    pub fn extend(&mut self, msg_iter: impl Iterator<Item = midi::msg::Result>) -> Status {
         let mut status = Status::Unchanged;
 
         for msg in msg_iter {

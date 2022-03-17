@@ -1,5 +1,23 @@
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Midi initialization failed")]
+    Init(#[from] midir::InitError),
+
+    #[error("Failed to parse Midi message")]
+    ParseError(#[from] midi_msg::ParseError),
+
+    #[error("Midi port connection failed")]
+    PortConnection,
+
+    #[error("Couldn't retrieve a port name")]
+    PortInfoError(#[from] midir::PortInfoError),
+
+    #[error("Invalid Midi port name {0}")]
+    PortNotFound(Arc<str>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PortNb {
     One,
@@ -106,22 +124,73 @@ impl<T> DirectionalPorts<T> {
 }
 
 pub struct Ports {
-    pub ins: DirectionalPorts<midir::MidiInputPort>,
+    midi_in: [crate::MidiIn; 2],
+    pub list: DirectionalPorts<midir::MidiInputPort>,
     pub client_name: Arc<str>,
 }
 
 impl Ports {
-    pub fn new(client_name: &str) -> Self {
-        Ports {
-            ins: Default::default(),
-            client_name: client_name.into(),
-        }
+    pub fn try_new(client_name: Arc<str>) -> Result<Self, Error> {
+        let midi_in1 = crate::MidiIn::new(&client_name)?;
+        let midi_in2 = crate::MidiIn::new(&client_name)?;
+
+        let mut list = DirectionalPorts::<midir::MidiInputPort>::default();
+        list.update_from(&client_name, midi_in1.io().unwrap())?;
+
+        Ok(Ports {
+            midi_in: [midi_in1, midi_in2],
+            list,
+            client_name,
+        })
     }
 
-    pub fn update(&mut self, midi_in: &midir::MidiInput) -> Result<(), midir::PortInfoError> {
-        let Ports { client_name, ins } = self;
+    fn midi_in_mut(&mut self, port_nb: super::PortNb) -> &mut crate::MidiIn {
+        &mut self.midi_in[port_nb.idx()]
+    }
 
-        ins.update_from(client_name, midi_in)?;
+    pub fn refresh(&mut self) -> Result<(), Error> {
+        self.list.update_from(
+            self.client_name.as_ref(),
+            &midir::MidiInput::new(&format!("{} referesh ports", self.client_name.as_ref(),))?,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn connect<C>(
+        &mut self,
+        port_nb: super::PortNb,
+        port_name: Arc<str>,
+        callback: C,
+    ) -> Result<(), Error>
+    where
+        C: FnMut(u64, &[u8]) + Send + 'static,
+    {
+        let port = self
+            .list
+            .get(&port_name)
+            .ok_or_else(|| Error::PortNotFound(port_name.clone()))?
+            .clone();
+
+        let app_port_name = format!("{} {}", self.client_name, port_nb);
+        self.midi_in_mut(port_nb)
+            .connect(port_name.clone(), &port, &app_port_name, callback)
+            .map_err(|_| {
+                self.list.disconnected(port_nb);
+                Error::PortConnection
+            })?;
+
+        self.list.connected(port_nb, port_name);
+        self.refresh()?;
+
+        Ok(())
+    }
+
+    pub fn disconnect(&mut self, port_nb: super::PortNb) -> Result<(), Error> {
+        self.midi_in_mut(port_nb).disconnect();
+
+        self.list.disconnected(port_nb);
+        self.refresh()?;
 
         Ok(())
     }
