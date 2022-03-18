@@ -5,4 +5,4 @@ pub mod msg;
 pub use msg::Msg;
 
 pub mod port;
-pub use port::{DirectionalPorts, PortNb, Ports};
+pub use port::{PortNb, Ports};

@@ -69,7 +69,7 @@ impl DirectionalPorts {
         }
     }
 
-    fn update_from<T>(&mut self, ports: &crate::midi::DirectionalPorts<T>) {
+    fn update_from(&mut self, ports: &midi::Ports) {
         self.list.clear();
         self.list.extend(ports.list().cloned());
 
@@ -77,7 +77,7 @@ impl DirectionalPorts {
         self.update_cur(midi::PortNb::Two, ports);
     }
 
-    fn update_cur<T>(&mut self, port_nb: midi::PortNb, ports: &crate::midi::DirectionalPorts<T>) {
+    fn update_cur(&mut self, port_nb: midi::PortNb, ports: &midi::Ports) {
         self.cur[port_nb.idx()] = ports
             .cur(port_nb)
             .cloned()
@@ -109,7 +109,7 @@ impl PortsWidget {
     pub fn try_new(client_name: &str) -> Result<Self, Error> {
         let midi_ports = midi::Ports::try_new(client_name.into())?;
         let mut ports = DirectionalPorts::default();
-        ports.update_from(&midi_ports.list);
+        ports.update_from(&midi_ports);
 
         Ok(Self { midi_ports, ports })
     }
@@ -149,7 +149,7 @@ impl PortsWidget {
     }
 
     pub fn update(&mut self) {
-        self.ports.update_from(&self.midi_ports.list);
+        self.ports.update_from(&self.midi_ports);
     }
 
     pub fn refresh_ports(&mut self) -> Result<(), Error> {

@@ -6,7 +6,7 @@ pub enum Error {
     Connection(Arc<str>),
 }
 
-pub type MidiIn = MidiIO<midir::MidiInput, midir::MidiInputConnection<Arc<str>>>;
+pub type MidiIn = MidiIO<midir::MidiInput, midir::MidiInputConnection<()>>;
 
 pub enum MidiIO<IO: midir::MidiIO, C> {
     Connected(C),
@@ -21,20 +21,6 @@ impl<IO: midir::MidiIO, C> Default for MidiIO<IO, C> {
 }
 
 impl<IO: midir::MidiIO, C> MidiIO<IO, C> {
-    pub fn io(&self) -> Option<&IO> {
-        match self {
-            Self::Disconnected(io) => Some(io),
-            _ => None,
-        }
-    }
-
-    pub fn conn(&mut self) -> Option<&mut C> {
-        match self {
-            Self::Connected(conn) => Some(conn),
-            _ => None,
-        }
-    }
-
     fn is_connected(&self) -> bool {
         matches!(self, Self::Connected(_))
     }
@@ -62,10 +48,9 @@ impl MidiIn {
                     port,
                     client_port_name,
                     move |ts, buf, _port_name| callback(ts, buf),
-                    port_name.clone(),
+                    (),
                 ) {
                     Ok(conn) => {
-                        log::info!("Connected to {}", port_name);
                         *self = Self::Connected(conn);
                     }
                     Err(err) => {
@@ -86,9 +71,8 @@ impl MidiIn {
         if self.is_connected() {
             match std::mem::take(self) {
                 Self::Connected(conn) => {
-                    let (io, port_name) = conn.close();
+                    let (io, _) = conn.close();
                     *self = Self::Disconnected(io);
-                    log::debug!("Disconnected from {}", port_name);
                 }
                 _ => unreachable!(),
             }
