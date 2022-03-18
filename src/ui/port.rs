@@ -147,13 +147,18 @@ impl PortsWidget {
 
         response
     }
+}
 
-    pub fn update(&mut self) {
+/// The following functions must be called from the AppController thread,
+/// not the UI update thread.
+impl PortsWidget {
+    fn update(&mut self) {
         self.ports.update_from(&self.midi_ports);
     }
 
     pub fn refresh_ports(&mut self) -> Result<(), Error> {
         self.midi_ports.refresh()?;
+        self.update();
 
         Ok(())
     }
