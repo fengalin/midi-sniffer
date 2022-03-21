@@ -126,6 +126,7 @@ impl epi::App for App {
     }
 
     fn on_exit(&mut self) {
+        log::debug!("Shutting down");
         self.shutdown();
     }
 }
@@ -279,6 +280,6 @@ impl AppController {
             }
         }
 
-        log::info!("Shuting down Sniffer Controller loop");
+        log::info!("Shutting down Sniffer Controller loop");
     }
 }

@@ -19,6 +19,8 @@ pub enum Error {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg(feature = "save")]
+#[derive(serde::Serialize)]
 pub enum PortNb {
     One,
     Two,

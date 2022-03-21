@@ -169,15 +169,16 @@ impl PortsWidget {
         port_name: Arc<str>,
         msg_tx: channel::Sender<midi::msg::Result>,
     ) -> Result<(), Error> {
-        let callback = move |ts, buf: &[u8]| match midi_msg::MidiMsg::from_midi(buf) {
-            Ok((msg, _len)) => {
-                msg_tx.send(Ok(midi::Msg { ts, port_nb, msg })).unwrap();
-            }
-            Err(err) => {
-                log::error!("Failed to parse Midi buffer: {}", err);
-                msg_tx
-                    .send(Err(midi::msg::Error { ts, port_nb, err }))
-                    .unwrap();
+        let callback = move |ts, buf: &[u8]| {
+            let origin = midi::msg::Origin::new(ts, port_nb, buf);
+            match midi_msg::MidiMsg::from_midi(&origin.buffer) {
+                Ok((msg, _len)) => {
+                    msg_tx.send(Ok(midi::Msg { origin, msg })).unwrap();
+                }
+                Err(err) => {
+                    log::error!("Failed to parse Midi buffer: {}", err);
+                    msg_tx.send(Err(midi::msg::Error { origin, err })).unwrap();
+                }
             }
         };
 

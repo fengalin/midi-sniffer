@@ -1,55 +1,67 @@
 use eframe::egui;
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use crate::midi::{self, PortNb};
 
 const MAX_REPETITIONS: u8 = 99;
 const MAX_REPETITIONS_EXCEEDED: &str = ">99";
 
+#[derive(Clone)]
+#[cfg(feature = "save")]
+#[derive(serde::Serialize)]
 pub struct MsgParseResult {
-    ts_str: String,
+    #[cfg(feature = "save")]
+    #[serde(rename = "timestamp")]
+    ts_str: Arc<str>,
+
+    #[cfg(feature = "save")]
+    #[serde(rename = "port")]
     port_nb: PortNb,
+
     repetitions: u8,
-    res_str: String,
-    res: Result<midi::msg::Msg, midi::msg::Error>,
+
+    is_err: bool,
+
+    #[cfg(feature = "save")]
+    #[serde(rename = "parsed")]
+    res_str: Arc<str>,
+
+    buffer: Arc<[u8]>,
 }
 
 impl PartialEq<midi::msg::Result> for MsgParseResult {
     fn eq(&self, other: &midi::msg::Result) -> bool {
-        match (&self.res, other) {
-            (Ok(s), Ok(o)) => s.port_nb == o.port_nb && s.msg.eq(&o.msg),
-            (Err(s), Err(o)) => {
-                // FIXME would be great to be able compare errors without
-                // matching on the string but midi_msg::ParseError
-                // doesn't impl PartialEq
-                s.port_nb == o.port_nb && self.res_str == format!("{}", o.err)
-            }
-            _ => false,
-        }
+        let other_origin = match other {
+            Ok(ok) => &ok.origin,
+            Err(err) => &err.origin,
+        };
+        self.port_nb == other_origin.port_nb && self.buffer == other_origin.buffer
     }
 }
 
 impl From<midi::msg::Result> for MsgParseResult {
     fn from(res: midi::msg::Result) -> Self {
         match res {
-            Ok(msg) => {
+            Ok(ok) => {
                 let mut res_str = String::new();
-                write_midi_msg(&mut res_str, &msg.msg).unwrap();
+                write_midi_msg(&mut res_str, &ok.msg).unwrap();
 
                 Self {
-                    ts_str: format!("{}", msg.ts),
-                    port_nb: msg.port_nb,
+                    ts_str: format!("{}", ok.origin.ts).into(),
+                    port_nb: ok.origin.port_nb,
                     repetitions: 1,
-                    res_str,
-                    res: Ok(msg),
+                    res_str: res_str.into(),
+                    buffer: ok.origin.buffer,
+                    is_err: false,
                 }
             }
-            Err(msg_err) => Self {
-                ts_str: format!("{}", msg_err.ts),
-                port_nb: msg_err.port_nb,
+            Err(err) => Self {
+                ts_str: format!("{}", err.origin.ts).into(),
+                port_nb: err.origin.port_nb,
                 repetitions: 1,
-                res_str: format!("{}", msg_err.err),
-                res: Err(msg_err),
+                res_str: format!("{}", err.err).into(),
+                buffer: err.origin.buffer,
+                is_err: true,
             },
         }
     }
@@ -71,7 +83,7 @@ impl Status {
 }
 
 pub struct MsgListWidget {
-    pub list: Vec<MsgParseResult>,
+    pub list: Vec<Arc<MsgParseResult>>,
     follows_cursor: bool,
 }
 
@@ -89,8 +101,13 @@ impl MsgListWidget {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.follows_cursor, "Follow");
+                // FIXME set button inactive if list is empty.
                 if ui.button("Clear").clicked() {
                     self.list.clear();
+                }
+                #[cfg(feature = "save")]
+                if ui.button("Save").clicked() {
+                    self.save();
                 }
             });
 
@@ -115,7 +132,7 @@ impl MsgListWidget {
                             midi::PortNb::Two => egui::Color32::from_rgb(0, 0x48, 0),
                         };
 
-                        let _ = ui.selectable_label(false, &msg.ts_str);
+                        let _ = ui.selectable_label(false, msg.ts_str.as_ref());
 
                         let _ = ui.selectable_label(
                             false,
@@ -133,11 +150,12 @@ impl MsgListWidget {
                         };
                         let _ = ui.selectable_label(false, repetitions);
 
-                        let msg_txt = egui::RichText::new(&msg.res_str).color(egui::Color32::WHITE);
-                        let msg_txt = if msg.res.is_ok() {
-                            msg_txt.background_color(row_color)
-                        } else {
+                        let msg_txt =
+                            egui::RichText::new(msg.res_str.as_ref()).color(egui::Color32::WHITE);
+                        let msg_txt = if msg.is_err {
                             msg_txt.background_color(egui::Color32::DARK_RED)
+                        } else {
+                            msg_txt.background_color(row_color)
                         };
                         let _ = ui.selectable_label(false, msg_txt);
                         ui.end_row();
@@ -150,27 +168,73 @@ impl MsgListWidget {
             })
         });
     }
+}
 
+impl MsgListWidget {
     #[must_use]
     pub fn extend(&mut self, msg_iter: impl Iterator<Item = midi::msg::Result>) -> Status {
         let mut status = Status::Unchanged;
 
         for msg in msg_iter {
             match self.list.last_mut() {
-                Some(last) if last == &msg => {
+                Some(last) if last.as_ref() == &msg => {
                     if last.repetitions < MAX_REPETITIONS {
-                        last.repetitions += 1;
+                        Arc::make_mut(last).repetitions += 1;
                         status.updated();
                     }
                 }
                 _ => {
-                    self.list.push(msg.into());
+                    let parse_res: MsgParseResult = msg.into();
+                    self.list.push(parse_res.into());
                     status.updated();
                 }
             }
         }
 
         status
+    }
+
+    #[cfg(feature = "save")]
+    fn save(&self) {
+        let msg_list = self.list.clone();
+        std::thread::spawn(move || {
+            use std::fs;
+
+            // FIXME restore last directory
+            let file_path = rfd::FileDialog::new()
+                .add_filter("Rusty Object Notation (ron)", &["ron"])
+                .set_directory("./")
+                .set_file_name("midi_exchg.ron")
+                .save_file();
+
+            if let Some(file_path) = file_path {
+                match fs::File::create(&file_path) {
+                    Ok(file) => {
+                        use std::io::{self, Write};
+
+                        let config = ron::ser::PrettyConfig::new();
+                        let new_line = config.new_line.clone();
+                        // Custom config to keep message fields on a single line
+                        // while using spaces between the fields and items.
+                        let config = config.new_line(" ".into()).indentor("".into());
+
+                        let mut writer = io::BufWriter::new(file);
+                        for msg in msg_list {
+                            let config_cl = config.clone();
+                            ron::ser::to_writer_pretty(&mut writer, &msg, config_cl).unwrap();
+                            writer.write_all(new_line.as_bytes()).unwrap();
+                        }
+
+                        log::debug!("Saved Midi messages to: {}", file_path.display());
+                    }
+                    Err(err) => {
+                        // FIXME probably some errors can be handled
+                        // FIXME feedback to the UI
+                        log::error!("Couldn't create file {}: {err}", file_path.display());
+                    }
+                }
+            }
+        });
     }
 }
 
