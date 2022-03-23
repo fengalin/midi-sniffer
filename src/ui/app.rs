@@ -92,21 +92,15 @@ impl epi::App for App {
                     use super::port;
                     use crate::midi::PortNb;
 
-                    let mut resp = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
+                    let resp1 = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
+                    let resp2 = self.ports_widget.lock().unwrap().show(PortNb::Two, ui);
 
-                    if ui.button("Refresh Ports").clicked() {
+                    if let Some(resp) = resp1.or(resp2) {
+                        use port::Response::*;
+
                         self.last_err = None;
                         self.refresh_ports();
-                    }
 
-                    let resp2 = self.ports_widget.lock().unwrap().show(PortNb::Two, ui);
-                    if resp2.is_some() {
-                        resp = resp2;
-                    }
-
-                    if let Some(resp) = resp {
-                        use port::Response::*;
-                        self.last_err = None;
                         match resp {
                             Connect((port_nb, port_name)) => {
                                 self.connect(port_nb, port_name);
@@ -114,6 +108,7 @@ impl epi::App for App {
                             Disconnect(port_nb) => {
                                 self.disconnect(port_nb);
                             }
+                            CheckingList => (), // only refresh ports & clear last_err
                         }
                     }
                 });
@@ -132,20 +127,18 @@ impl epi::App for App {
                     .color(egui::Color32::WHITE)
                     .background_color(egui::Color32::DARK_RED);
                 ui.group(|ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        use egui::Widget;
-                        let label = egui::Label::new(text).sense(egui::Sense::click());
-                        if label.ui(ui).clicked() {
-                            self.last_err = None;
-                        }
-                    })
+                    use egui::Widget;
+                    let label = egui::Label::new(text).sense(egui::Sense::click());
+                    if label.ui(ui).clicked() {
+                        self.last_err = None;
+                    }
                 });
             }
         });
     }
 
     fn on_exit(&mut self) {
-        log::debug!("Shutting down");
+        log::info!("Shutting down");
         self.shutdown();
     }
 }
@@ -299,6 +292,6 @@ impl AppController {
             }
         }
 
-        log::info!("Shutting down Sniffer Controller loop");
+        log::debug!("Shutting down Sniffer Controller loop");
     }
 }

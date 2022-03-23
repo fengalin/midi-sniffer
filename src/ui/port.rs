@@ -98,6 +98,7 @@ impl Default for DirectionalPorts {
 pub enum Response {
     Connect((midi::PortNb, Arc<str>)),
     Disconnect(midi::PortNb),
+    CheckingList,
 }
 
 pub struct PortsWidget {
@@ -116,14 +117,16 @@ impl PortsWidget {
 
     #[must_use]
     pub fn show(&mut self, port_nb: midi::PortNb, ui: &mut egui::Ui) -> Option<Response> {
-        let mut response = None;
+        use Response::*;
 
         let view = self.ports.view(port_nb);
         let mut selected = view.cur();
 
-        egui::ComboBox::from_label(port_nb.as_str())
+        let resp = egui::ComboBox::from_label(port_nb.as_str())
             .selected_text(view.cur.as_ref())
             .show_ui(ui, |ui| {
+                let mut resp = None;
+
                 if ui
                     .selectable_value(
                         &mut selected,
@@ -132,7 +135,7 @@ impl PortsWidget {
                     )
                     .clicked()
                 {
-                    response = Some(Response::Disconnect(port_nb));
+                    resp = Some(Disconnect(port_nb));
                 }
 
                 for port in view.unique_ports_iter() {
@@ -140,12 +143,19 @@ impl PortsWidget {
                         .selectable_value(&mut selected, port.clone(), port.name.as_ref())
                         .clicked()
                     {
-                        response = Some(Response::Connect((port_nb, port.name)));
+                        resp = Some(Connect((port_nb, port.name)));
                     }
                 }
-            });
 
-        response
+                resp
+            })
+            .inner;
+
+        if let Some(None) = resp {
+            Some(CheckingList)
+        } else {
+            resp.flatten()
+        }
     }
 }
 
