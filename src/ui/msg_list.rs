@@ -1,11 +1,16 @@
 use crossbeam_channel as channel;
-use eframe::egui;
-use std::{fmt, sync::Arc};
+use eframe::{egui, epi};
+use std::{
+    fmt,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use crate::midi::{self, PortNb};
 
 const MAX_REPETITIONS: u8 = 99;
 const MAX_REPETITIONS_EXCEEDED: &str = ">99";
+const STORAGE_MSG_LIST_DIR: &str = "msg_list_dir";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -90,6 +95,7 @@ pub struct MsgListWidget {
     pub list: Vec<Arc<MsgParseResult>>,
     follows_cursor: bool,
     err_tx: channel::Sender<super::app::Error>,
+    msg_list_dir: Arc<Mutex<PathBuf>>,
 }
 
 impl MsgListWidget {
@@ -98,6 +104,7 @@ impl MsgListWidget {
             list: Vec::new(),
             follows_cursor: true,
             err_tx,
+            msg_list_dir: Arc::new(Mutex::new(PathBuf::from("."))),
         }
     }
 }
@@ -113,7 +120,7 @@ impl MsgListWidget {
                     }
                     #[cfg(feature = "save")]
                     if ui.button("Save").clicked() {
-                        self.save();
+                        self.save_list();
                     }
                 });
             });
@@ -175,6 +182,21 @@ impl MsgListWidget {
             })
         });
     }
+
+    pub fn setup(&mut self, storage: Option<&dyn epi::Storage>) {
+        if let Some(storage) = storage {
+            if let Some(msg_list_dir) = storage.get_string(STORAGE_MSG_LIST_DIR) {
+                *self.msg_list_dir.lock().unwrap() = msg_list_dir.into();
+            }
+        }
+    }
+
+    pub fn save(&mut self, storage: &mut dyn epi::Storage) {
+        storage.set_string(
+            STORAGE_MSG_LIST_DIR,
+            self.msg_list_dir.lock().unwrap().display().to_string(),
+        );
+    }
 }
 
 impl MsgListWidget {
@@ -202,16 +224,16 @@ impl MsgListWidget {
     }
 
     #[cfg(feature = "save")]
-    fn save(&self) {
+    fn save_list(&self) {
         let err_tx = self.err_tx.clone();
         let msg_list = self.list.clone();
+        let msg_list_dir = self.msg_list_dir.clone();
         std::thread::spawn(move || {
             use std::fs;
 
-            // FIXME restore last directory
             let file_path = rfd::FileDialog::new()
                 .add_filter("Rusty Object Notation (ron)", &["ron"])
-                .set_directory("./")
+                .set_directory(&*msg_list_dir.lock().unwrap().clone())
                 .set_file_name("midi_exchg.ron")
                 .save_file();
 
@@ -233,6 +255,9 @@ impl MsgListWidget {
                             writer.write_all(new_line.as_bytes()).unwrap();
                         }
 
+                        *msg_list_dir.lock().unwrap() = file_path
+                            .parent()
+                            .map_or_else(|| ".".into(), ToOwned::to_owned);
                         log::debug!("Saved Midi messages to: {}", file_path.display());
                     }
                     Err(err) => {

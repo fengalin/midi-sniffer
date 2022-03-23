@@ -12,7 +12,7 @@ edition = "2021"
 
 [dependencies]
 crossbeam-channel = "0.5"
-eframe = "0.17"
+eframe = { version = "0.17", features = ["persistence"] }
 env_logger = "0.9"
 log = { version = "0.4", features = ["release_max_level_debug"] }
 midi-msg = "0.3.0"

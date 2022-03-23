@@ -52,7 +52,7 @@ impl App {
         let msg_list_widget_clone = msg_list_widget.clone();
         let ports_widget_clone = ports_widget.clone();
         let controller_thread = std::thread::spawn(move || {
-            AppController::new(req_rx, err_tx, msg_list_widget_clone, ports_widget_clone).run()
+            Controller::new(req_rx, err_tx, msg_list_widget_clone, ports_widget_clone).run()
         });
 
         Ok(Self {
@@ -68,17 +68,7 @@ impl App {
 
 impl epi::App for App {
     fn name(&self) -> &str {
-        "MIDI Sniffer"
-    }
-
-    fn setup(
-        &mut self,
-        ctx: &egui::Context,
-        frame: &epi::Frame,
-        _storage: Option<&dyn epi::Storage>,
-    ) {
-        ctx.set_visuals(egui::Visuals::dark());
-        self.have_frame(frame.clone());
+        "midi-sniffer"
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
@@ -89,28 +79,12 @@ impl epi::App for App {
 
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    use super::port;
                     use crate::midi::PortNb;
 
                     let resp1 = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
                     let resp2 = self.ports_widget.lock().unwrap().show(PortNb::Two, ui);
 
-                    if let Some(resp) = resp1.or(resp2) {
-                        use port::Response::*;
-
-                        self.last_err = None;
-                        self.refresh_ports();
-
-                        match resp {
-                            Connect((port_nb, port_name)) => {
-                                self.connect(port_nb, port_name);
-                            }
-                            Disconnect(port_nb) => {
-                                self.disconnect(port_nb);
-                            }
-                            CheckingList => (), // only refresh ports & clear last_err
-                        }
-                    }
+                    Dispatcher::<super::PortsWidget>::dispatch(self, resp1.or(resp2));
                 });
 
                 ui.add_space(2f32);
@@ -120,7 +94,7 @@ impl epi::App for App {
                 self.msg_list_widget.lock().unwrap().show(ui);
             });
 
-            self.pop_error();
+            self.pop_err();
             if let Some(ref err) = self.last_err {
                 ui.add_space(5f32);
                 let text = egui::RichText::new(err.to_string())
@@ -130,11 +104,34 @@ impl epi::App for App {
                     use egui::Widget;
                     let label = egui::Label::new(text).sense(egui::Sense::click());
                     if label.ui(ui).clicked() {
-                        self.last_err = None;
+                        self.clear_last_err();
                     }
                 });
             }
         });
+    }
+
+    fn setup(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &epi::Frame,
+        storage: Option<&dyn epi::Storage>,
+    ) {
+        ctx.set_visuals(egui::Visuals::dark());
+        self.have_frame(frame.clone());
+
+        let resps = self.ports_widget.lock().unwrap().setup(storage);
+        for resp in resps {
+            Dispatcher::<super::PortsWidget>::dispatch(self, Some(resp));
+        }
+
+        self.msg_list_widget.lock().unwrap().setup(storage);
+    }
+
+    fn save(&mut self, storage: &mut dyn epi::Storage) {
+        self.ports_widget.lock().unwrap().save(storage);
+        self.msg_list_widget.lock().unwrap().save(storage);
+        self.clear_last_err();
     }
 
     fn on_exit(&mut self) {
@@ -154,25 +151,15 @@ impl App {
         }
     }
 
-    pub fn refresh_ports(&self) {
-        self.req_tx.send(Request::RefreshPorts).unwrap();
-    }
-
-    pub fn connect(&self, port_nb: midi::PortNb, port_name: Arc<str>) {
-        self.req_tx
-            .send(Request::Connect((port_nb, port_name)))
-            .unwrap();
-    }
-
-    pub fn disconnect(&self, port_nb: midi::PortNb) {
-        self.req_tx.send(Request::Disconnect(port_nb)).unwrap();
-    }
-
     pub fn have_frame(&self, frame: epi::Frame) {
         self.req_tx.send(Request::HaveFrame(frame)).unwrap();
     }
 
-    pub fn pop_error(&mut self) {
+    fn clear_last_err(&mut self) {
+        self.last_err = None;
+    }
+
+    fn pop_err(&mut self) {
         match self.err_rx.try_recv() {
             Err(channel::TryRecvError::Empty) => (),
             Ok(err) => self.last_err = Some(err),
@@ -181,7 +168,32 @@ impl App {
     }
 }
 
-struct AppController {
+struct Dispatcher<T>(std::marker::PhantomData<*const T>);
+
+impl Dispatcher<super::PortsWidget> {
+    fn dispatch(app: &mut App, resp: Option<super::port::Response>) {
+        if let Some(resp) = resp {
+            use super::port::Response::*;
+
+            app.clear_last_err();
+            app.req_tx.send(Request::RefreshPorts).unwrap();
+
+            match resp {
+                Connect((port_nb, port_name)) => {
+                    app.req_tx
+                        .send(Request::Connect((port_nb, port_name)))
+                        .unwrap();
+                }
+                Disconnect(port_nb) => {
+                    app.req_tx.send(Request::Disconnect(port_nb)).unwrap();
+                }
+                CheckingList => (), // only refresh ports & clear last_err
+            }
+        }
+    }
+}
+
+struct Controller {
     msg_rx: channel::Receiver<midi::msg::Result>,
     msg_tx: channel::Sender<midi::msg::Result>,
     req_rx: channel::Receiver<Request>,
@@ -192,7 +204,7 @@ struct AppController {
     frame: Option<epi::Frame>,
 }
 
-impl AppController {
+impl Controller {
     fn new(
         req_rx: channel::Receiver<Request>,
         err_tx: channel::Sender<Error>,
@@ -267,11 +279,6 @@ impl AppController {
     }
 
     fn run(mut self) {
-        self.ports_widget
-            .lock()
-            .unwrap()
-            .auto_connect(self.msg_tx.clone());
-
         loop {
             if let Some(request) = self.try_receive_request() {
                 match self.handle_request(request) {

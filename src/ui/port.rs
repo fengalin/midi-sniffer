@@ -1,11 +1,13 @@
 use crossbeam_channel as channel;
-use eframe::egui;
+use eframe::{egui, epi};
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 
 use crate::midi;
 
 static DISCONNECTED: Lazy<Arc<str>> = Lazy::new(|| "Disconnected".into());
+const STORAGE_PORT_1: &str = "port_1";
+const STORAGE_PORT_2: &str = "port_2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -157,6 +159,37 @@ impl PortsWidget {
             resp.flatten()
         }
     }
+
+    pub fn setup(&mut self, storage: Option<&dyn epi::Storage>) -> impl Iterator<Item = Response> {
+        use Response::*;
+
+        let mut resp = Vec::new();
+        if let Some(storage) = storage {
+            if let Some(port) = storage.get_string(STORAGE_PORT_1) {
+                if port != DISCONNECTED.as_ref() {
+                    resp.push(Connect((midi::PortNb::One, port.into())));
+                }
+            }
+            if let Some(port) = storage.get_string(STORAGE_PORT_2) {
+                if port != DISCONNECTED.as_ref() {
+                    resp.push(Connect((midi::PortNb::Two, port.into())));
+                }
+            }
+        }
+
+        resp.into_iter()
+    }
+
+    pub fn save(&mut self, storage: &mut dyn epi::Storage) {
+        storage.set_string(
+            STORAGE_PORT_1,
+            self.ports.cur[midi::PortNb::One.idx()].to_string(),
+        );
+        storage.set_string(
+            STORAGE_PORT_2,
+            self.ports.cur[midi::PortNb::Two.idx()].to_string(),
+        );
+    }
 }
 
 /// The following functions must be called from the AppController thread,
@@ -203,20 +236,5 @@ impl PortsWidget {
         self.update();
 
         Ok(())
-    }
-
-    /// Auto-connect to first available port
-    pub fn auto_connect(&mut self, msg_tx: channel::Sender<midi::msg::Result>) {
-        // FIXME save the last connected port and try to connect it again on startup
-
-        let ports = self.ports.list.clone();
-        for port_name in ports.iter().cloned() {
-            if self
-                .connect(midi::PortNb::One, port_name, msg_tx.clone())
-                .is_ok()
-            {
-                break;
-            }
-        }
     }
 }
