@@ -14,13 +14,12 @@ pub enum Error {
     #[error("Couldn't retrieve a port name")]
     PortInfoError(#[from] midir::PortInfoError),
 
-    #[error("Invalid Midi port name {0}")]
+    #[error("Invalid Midi port name {}", .0)]
     PortNotFound(Arc<str>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg(feature = "save")]
-#[derive(serde::Serialize)]
+#[cfg_attr(feature = "save", derive(serde::Serialize))]
 pub enum PortNb {
     One,
     Two,

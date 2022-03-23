@@ -14,11 +14,14 @@ const MAX_MSG_BATCHES_PER_UPDATE: usize = 30 / MSG_LIST_BATCH_SIZE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("MIDI error: {}", 0)]
+    #[error("{}", .0)]
     Midi(#[from] super::port::Error),
 
-    #[error("MIDI Message error: {}", 0)]
+    #[error("Failed to parse MIDI Message")]
     Parse(#[from] crate::midi::msg::Error),
+
+    #[error("{}", .0)]
+    MsgList(#[from] super::msg_list::Error),
 }
 
 enum Request {
@@ -31,31 +34,33 @@ enum Request {
 
 pub struct App {
     msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
-    to_tx: channel::Sender<Request>,
-    from_rx: channel::Receiver<Error>,
+    req_tx: channel::Sender<Request>,
+    err_rx: channel::Receiver<Error>,
     ports_widget: Arc<Mutex<super::PortsWidget>>,
+    last_err: Option<Error>,
     controller_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl App {
     pub fn try_new(client_name: &str) -> Result<Self, Error> {
-        let (from_tx, from_rx) = channel::unbounded();
-        let (to_tx, to_rx) = channel::unbounded();
+        let (err_tx, err_rx) = channel::unbounded();
+        let (req_tx, req_rx) = channel::unbounded();
 
         let ports_widget = Arc::new(Mutex::new(super::PortsWidget::try_new(client_name)?));
-        let msg_list_widget = Arc::new(Mutex::new(super::MsgListWidget::default()));
+        let msg_list_widget = Arc::new(Mutex::new(super::MsgListWidget::new(err_tx.clone())));
 
         let msg_list_widget_clone = msg_list_widget.clone();
         let ports_widget_clone = ports_widget.clone();
         let controller_thread = std::thread::spawn(move || {
-            AppController::new(to_rx, from_tx, msg_list_widget_clone, ports_widget_clone).run()
+            AppController::new(req_rx, err_tx, msg_list_widget_clone, ports_widget_clone).run()
         });
 
         Ok(Self {
             msg_list_widget,
-            to_tx,
-            from_rx,
+            req_tx,
+            err_rx,
             ports_widget,
+            last_err: None,
             controller_thread: Some(controller_thread),
         })
     }
@@ -90,6 +95,7 @@ impl epi::App for App {
                     let mut resp = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
 
                     if ui.button("Refresh Ports").clicked() {
+                        self.last_err = None;
                         self.refresh_ports();
                     }
 
@@ -98,14 +104,17 @@ impl epi::App for App {
                         resp = resp2;
                     }
 
-                    match resp {
-                        Some(port::Response::Connect((port_nb, port_name))) => {
-                            self.connect(port_nb, port_name);
+                    if let Some(resp) = resp {
+                        use port::Response::*;
+                        self.last_err = None;
+                        match resp {
+                            Connect((port_nb, port_name)) => {
+                                self.connect(port_nb, port_name);
+                            }
+                            Disconnect(port_nb) => {
+                                self.disconnect(port_nb);
+                            }
                         }
-                        Some(port::Response::Disconnect(port_nb)) => {
-                            self.disconnect(port_nb);
-                        }
-                        None => (),
                     }
                 });
 
@@ -116,10 +125,20 @@ impl epi::App for App {
                 self.msg_list_widget.lock().unwrap().show(ui);
             });
 
-            if let Some(err) = self.pop_error() {
+            self.pop_error();
+            if let Some(ref err) = self.last_err {
                 ui.add_space(5f32);
+                let text = egui::RichText::new(err.to_string())
+                    .color(egui::Color32::WHITE)
+                    .background_color(egui::Color32::DARK_RED);
                 ui.group(|ui| {
-                    ui.label(&format!("An error occured: {}", err));
+                    ui.horizontal_wrapped(|ui| {
+                        use egui::Widget;
+                        let label = egui::Label::new(text).sense(egui::Sense::click());
+                        if label.ui(ui).clicked() {
+                            self.last_err = None;
+                        }
+                    })
                 });
             }
         });
@@ -134,7 +153,7 @@ impl epi::App for App {
 impl App {
     pub fn shutdown(&mut self) {
         if let Some(controller_thread) = self.controller_thread.take() {
-            if let Err(err) = self.to_tx.send(Request::Shutdown) {
+            if let Err(err) = self.req_tx.send(Request::Shutdown) {
                 log::error!("Sniffer couldn't request shutdown: {}", err);
             } else {
                 let _ = controller_thread.join();
@@ -143,27 +162,27 @@ impl App {
     }
 
     pub fn refresh_ports(&self) {
-        self.to_tx.send(Request::RefreshPorts).unwrap();
+        self.req_tx.send(Request::RefreshPorts).unwrap();
     }
 
     pub fn connect(&self, port_nb: midi::PortNb, port_name: Arc<str>) {
-        self.to_tx
+        self.req_tx
             .send(Request::Connect((port_nb, port_name)))
             .unwrap();
     }
 
     pub fn disconnect(&self, port_nb: midi::PortNb) {
-        self.to_tx.send(Request::Disconnect(port_nb)).unwrap();
+        self.req_tx.send(Request::Disconnect(port_nb)).unwrap();
     }
 
     pub fn have_frame(&self, frame: epi::Frame) {
-        self.to_tx.send(Request::HaveFrame(frame)).unwrap();
+        self.req_tx.send(Request::HaveFrame(frame)).unwrap();
     }
 
-    pub fn pop_error(&self) -> Option<Error> {
-        match self.from_rx.try_recv() {
-            Err(channel::TryRecvError::Empty) => None,
-            Ok(err) => Some(err),
+    pub fn pop_error(&mut self) {
+        match self.err_rx.try_recv() {
+            Err(channel::TryRecvError::Empty) => (),
+            Ok(err) => self.last_err = Some(err),
             Err(err) => panic!("{}", err),
         }
     }
@@ -172,8 +191,8 @@ impl App {
 struct AppController {
     msg_rx: channel::Receiver<midi::msg::Result>,
     msg_tx: channel::Sender<midi::msg::Result>,
-    to_rx: channel::Receiver<Request>,
-    from_tx: channel::Sender<Error>,
+    req_rx: channel::Receiver<Request>,
+    err_tx: channel::Sender<Error>,
     msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
     ports_widget: Arc<Mutex<super::PortsWidget>>,
     must_repaint: bool,
@@ -182,8 +201,8 @@ struct AppController {
 
 impl AppController {
     fn new(
-        to_rx: channel::Receiver<Request>,
-        from_tx: channel::Sender<Error>,
+        req_rx: channel::Receiver<Request>,
+        err_tx: channel::Sender<Error>,
         msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
         ports_widget: Arc<Mutex<super::PortsWidget>>,
     ) -> Self {
@@ -192,8 +211,8 @@ impl AppController {
         Self {
             msg_rx,
             msg_tx,
-            to_rx,
-            from_tx,
+            req_rx,
+            err_tx,
             msg_list_widget,
             ports_widget,
             must_repaint: false,
@@ -233,7 +252,7 @@ impl AppController {
 
     fn try_receive_request(&mut self) -> Option<Request> {
         let request = self
-            .to_rx
+            .req_rx
             .recv_deadline(Instant::now() + MSG_POLLING_INTERVAL);
         for _nb in 0..MAX_MSG_BATCHES_PER_UPDATE {
             // Update msg list widget with batches of at most
@@ -267,7 +286,7 @@ impl AppController {
                     Ok(ControlFlow::Break(())) => break,
                     Err(err) => {
                         // Propagate the error
-                        let _ = self.from_tx.send(err);
+                        let _ = self.err_tx.send(err);
                     }
                 }
             }

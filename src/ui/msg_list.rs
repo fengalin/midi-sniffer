@@ -1,3 +1,4 @@
+use crossbeam_channel as channel;
 use eframe::egui;
 use std::{fmt, sync::Arc};
 
@@ -6,24 +7,27 @@ use crate::midi::{self, PortNb};
 const MAX_REPETITIONS: u8 = 99;
 const MAX_REPETITIONS_EXCEEDED: &str = ">99";
 
-#[derive(Clone)]
-#[cfg(feature = "save")]
-#[derive(serde::Serialize)]
-pub struct MsgParseResult {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
     #[cfg(feature = "save")]
-    #[serde(rename = "timestamp")]
+    #[error("Failed to save message list: {}", .0)]
+    Save(#[from] std::io::Error),
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "save", derive(serde::Serialize))]
+pub struct MsgParseResult {
+    #[cfg_attr(feature = "save", serde(rename = "timestamp"))]
     ts_str: Arc<str>,
 
-    #[cfg(feature = "save")]
-    #[serde(rename = "port")]
+    #[cfg_attr(feature = "save", serde(rename = "port"))]
     port_nb: PortNb,
 
     repetitions: u8,
 
     is_err: bool,
 
-    #[cfg(feature = "save")]
-    #[serde(rename = "parsed")]
+    #[cfg_attr(feature = "save", serde(rename = "parsed"))]
     res_str: Arc<str>,
 
     buffer: Arc<[u8]>,
@@ -85,13 +89,15 @@ impl Status {
 pub struct MsgListWidget {
     pub list: Vec<Arc<MsgParseResult>>,
     follows_cursor: bool,
+    err_tx: channel::Sender<super::app::Error>,
 }
 
-impl Default for MsgListWidget {
-    fn default() -> Self {
+impl MsgListWidget {
+    pub fn new(err_tx: channel::Sender<super::app::Error>) -> Self {
         Self {
             list: Vec::new(),
             follows_cursor: true,
+            err_tx,
         }
     }
 }
@@ -101,14 +107,15 @@ impl MsgListWidget {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.follows_cursor, "Follow");
-                // FIXME set button inactive if list is empty.
-                if ui.button("Clear").clicked() {
-                    self.list.clear();
-                }
-                #[cfg(feature = "save")]
-                if ui.button("Save").clicked() {
-                    self.save();
-                }
+                ui.add_enabled_ui(!self.list.is_empty(), |ui| {
+                    if ui.button("Clear").clicked() {
+                        self.list.clear();
+                    }
+                    #[cfg(feature = "save")]
+                    if ui.button("Save").clicked() {
+                        self.save();
+                    }
+                });
             });
 
             ui.separator();
@@ -196,6 +203,7 @@ impl MsgListWidget {
 
     #[cfg(feature = "save")]
     fn save(&self) {
+        let err_tx = self.err_tx.clone();
         let msg_list = self.list.clone();
         std::thread::spawn(move || {
             use std::fs;
@@ -228,9 +236,8 @@ impl MsgListWidget {
                         log::debug!("Saved Midi messages to: {}", file_path.display());
                     }
                     Err(err) => {
-                        // FIXME probably some errors can be handled
-                        // FIXME feedback to the UI
                         log::error!("Couldn't create file {}: {err}", file_path.display());
+                        let _ = err_tx.send(Error::Save(err).into());
                     }
                 }
             }
