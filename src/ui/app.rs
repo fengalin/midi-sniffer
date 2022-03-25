@@ -1,16 +1,9 @@
 use crossbeam_channel as channel;
 use eframe::{egui, epi};
-use std::{
-    ops::ControlFlow,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::sync::{Arc, Mutex};
 
+use super::{controller, Dispatcher};
 use crate::midi;
-
-const MSG_POLLING_INTERVAL: Duration = Duration::from_millis(20);
-const MSG_LIST_BATCH_SIZE: usize = 5;
-const MAX_MSG_BATCHES_PER_UPDATE: usize = 30 / MSG_LIST_BATCH_SIZE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -24,7 +17,7 @@ pub enum Error {
     MsgList(#[from] super::msg_list::Error),
 }
 
-enum Request {
+pub enum Request {
     Connect((midi::PortNb, Arc<str>)),
     Disconnect(midi::PortNb),
     HaveFrame(epi::Frame),
@@ -49,11 +42,13 @@ impl App {
         let ports_widget = Arc::new(Mutex::new(super::PortsWidget::try_new(client_name)?));
         let msg_list_widget = Arc::new(Mutex::new(super::MsgListWidget::new(err_tx.clone())));
 
-        let msg_list_widget_clone = msg_list_widget.clone();
-        let ports_widget_clone = ports_widget.clone();
-        let controller_thread = std::thread::spawn(move || {
-            Controller::new(req_rx, err_tx, msg_list_widget_clone, ports_widget_clone).run()
-        });
+        let controller_thread = controller::Spawner {
+            req_rx,
+            err_tx,
+            msg_list_widget: msg_list_widget.clone(),
+            ports_widget: ports_widget.clone(),
+        }
+        .spawn();
 
         Ok(Self {
             msg_list_widget,
@@ -84,7 +79,7 @@ impl epi::App for App {
                     let resp1 = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
                     let resp2 = self.ports_widget.lock().unwrap().show(PortNb::Two, ui);
 
-                    Dispatcher::<super::PortsWidget>::dispatch(self, resp1.or(resp2));
+                    Dispatcher::<super::PortsWidget>::handle(self, resp1.or(resp2));
                 });
 
                 ui.add_space(2f32);
@@ -122,7 +117,7 @@ impl epi::App for App {
 
         let resps = self.ports_widget.lock().unwrap().setup(storage);
         for resp in resps {
-            Dispatcher::<super::PortsWidget>::dispatch(self, Some(resp));
+            Dispatcher::<super::PortsWidget>::handle(self, Some(resp));
         }
 
         self.msg_list_widget.lock().unwrap().setup(storage);
@@ -155,7 +150,11 @@ impl App {
         self.req_tx.send(Request::HaveFrame(frame)).unwrap();
     }
 
-    fn clear_last_err(&mut self) {
+    pub fn send_req(&mut self, req: Request) {
+        self.req_tx.send(req).unwrap();
+    }
+
+    pub fn clear_last_err(&mut self) {
         self.last_err = None;
     }
 
@@ -165,140 +164,5 @@ impl App {
             Ok(err) => self.last_err = Some(err),
             Err(err) => panic!("{}", err),
         }
-    }
-}
-
-struct Dispatcher<T>(std::marker::PhantomData<*const T>);
-
-impl Dispatcher<super::PortsWidget> {
-    fn dispatch(app: &mut App, resp: Option<super::port::Response>) {
-        if let Some(resp) = resp {
-            use super::port::Response::*;
-
-            app.clear_last_err();
-            app.req_tx.send(Request::RefreshPorts).unwrap();
-
-            match resp {
-                Connect((port_nb, port_name)) => {
-                    app.req_tx
-                        .send(Request::Connect((port_nb, port_name)))
-                        .unwrap();
-                }
-                Disconnect(port_nb) => {
-                    app.req_tx.send(Request::Disconnect(port_nb)).unwrap();
-                }
-                CheckingList => (), // only refresh ports & clear last_err
-            }
-        }
-    }
-}
-
-struct Controller {
-    msg_rx: channel::Receiver<midi::msg::Result>,
-    msg_tx: channel::Sender<midi::msg::Result>,
-    req_rx: channel::Receiver<Request>,
-    err_tx: channel::Sender<Error>,
-    msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
-    ports_widget: Arc<Mutex<super::PortsWidget>>,
-    must_repaint: bool,
-    frame: Option<epi::Frame>,
-}
-
-impl Controller {
-    fn new(
-        req_rx: channel::Receiver<Request>,
-        err_tx: channel::Sender<Error>,
-        msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
-        ports_widget: Arc<Mutex<super::PortsWidget>>,
-    ) -> Self {
-        let (msg_tx, msg_rx) = channel::unbounded();
-
-        Self {
-            msg_rx,
-            msg_tx,
-            req_rx,
-            err_tx,
-            msg_list_widget,
-            ports_widget,
-            must_repaint: false,
-            frame: None,
-        }
-    }
-
-    fn handle_request(&mut self, request: Request) -> Result<ControlFlow<(), ()>, Error> {
-        use self::Request::*;
-        match request {
-            Connect((port_nb, port_name)) => {
-                self.connect(port_nb, port_name)?;
-            }
-            Disconnect(port_nb) => {
-                self.ports_widget.lock().unwrap().disconnect(port_nb)?;
-            }
-            RefreshPorts => {
-                self.ports_widget.lock().unwrap().refresh_ports()?;
-            }
-            Shutdown => return Ok(ControlFlow::Break(())),
-            HaveFrame(egui_frame) => {
-                self.frame = Some(egui_frame);
-            }
-        }
-
-        Ok(ControlFlow::Continue(()))
-    }
-
-    fn connect(&mut self, port_nb: midi::PortNb, port_name: Arc<str>) -> Result<(), Error> {
-        self.ports_widget
-            .lock()
-            .unwrap()
-            .connect(port_nb, port_name, self.msg_tx.clone())?;
-
-        Ok(())
-    }
-
-    fn try_receive_request(&mut self) -> Option<Request> {
-        let request = self
-            .req_rx
-            .recv_deadline(Instant::now() + MSG_POLLING_INTERVAL);
-        for _nb in 0..MAX_MSG_BATCHES_PER_UPDATE {
-            // Update msg list widget with batches of at most
-            // MSG_LIST_BATCH_SIZE messages so as not to lock the widget for too long.
-            let mut msg_batch_iter = self.msg_rx.try_iter().take(MSG_LIST_BATCH_SIZE).peekable();
-            if msg_batch_iter.peek().is_none() {
-                break;
-            }
-
-            self.must_repaint =
-                { self.msg_list_widget.lock().unwrap().extend(msg_batch_iter) }.was_updated();
-        }
-
-        match request {
-            Ok(request) => Some(request),
-            Err(channel::RecvTimeoutError::Timeout) => None,
-            Err(err) => panic!("{}", err),
-        }
-    }
-
-    fn run(mut self) {
-        loop {
-            if let Some(request) = self.try_receive_request() {
-                match self.handle_request(request) {
-                    Ok(ControlFlow::Continue(())) => (),
-                    Ok(ControlFlow::Break(())) => break,
-                    Err(err) => {
-                        // Propagate the error
-                        let _ = self.err_tx.send(err);
-                    }
-                }
-            }
-
-            if self.must_repaint {
-                if let Some(ref frame) = self.frame {
-                    frame.request_repaint();
-                }
-                self.must_repaint = false;
-            }
-        }
-
-        log::debug!("Shutting down Sniffer Controller loop");
     }
 }
