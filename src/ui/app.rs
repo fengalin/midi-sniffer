@@ -8,6 +8,9 @@ use crate::midi;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{}", .0)]
+    Port(#[from] midi::port::Error),
+
+    #[error("{}", .0)]
     Midi(#[from] super::port::Error),
 
     #[error("Failed to parse MIDI Message")]
@@ -39,13 +42,14 @@ impl App {
         let (err_tx, err_rx) = channel::unbounded();
         let (req_tx, req_rx) = channel::unbounded();
 
-        let ports_widget = Arc::new(Mutex::new(super::PortsWidget::try_new(client_name)?));
+        let ports_widget = Arc::new(Mutex::new(super::PortsWidget::new()));
         let msg_list_widget = Arc::new(Mutex::new(super::MsgListWidget::new(err_tx.clone())));
 
         let controller_thread = controller::Spawner {
             req_rx,
             err_tx,
             msg_list_widget: msg_list_widget.clone(),
+            client_name: Arc::from(client_name),
             ports_widget: ports_widget.clone(),
         }
         .spawn();

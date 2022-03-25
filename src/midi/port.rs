@@ -66,16 +66,12 @@ impl Ports {
         let midi_in1 = crate::MidiIn::new(&client_name)?;
         let midi_in2 = crate::MidiIn::new(&client_name)?;
 
-        let mut this = Ports {
+        Ok(Self {
             map: BTreeMap::new(),
             cur: [None, None],
             midi_in: [midi_in1, midi_in2],
             client_name,
-        };
-
-        this.refresh()?;
-
-        Ok(this)
+        })
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Arc<str>> {

@@ -1,4 +1,3 @@
-use crossbeam_channel as channel;
 use eframe::{egui, epi};
 use once_cell::sync::Lazy;
 use std::sync::Arc;
@@ -11,9 +10,6 @@ const STORAGE_PORT_2: &str = "port_2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{0}")]
-    Port(#[from] midi::port::Error),
-
     #[error("Failed to parse Midi message")]
     ParseError(#[from] midi_msg::ParseError),
 }
@@ -104,17 +100,14 @@ pub enum Response {
 }
 
 pub struct PortsWidget {
-    pub midi_ports: midi::Ports,
     pub ports: DirectionalPorts,
 }
 
 impl PortsWidget {
-    pub fn try_new(client_name: &str) -> Result<Self, Error> {
-        let midi_ports = midi::Ports::try_new(client_name.into())?;
-        let mut ports = DirectionalPorts::default();
-        ports.update_from(&midi_ports);
-
-        Ok(Self { midi_ports, ports })
+    pub fn new() -> Self {
+        Self {
+            ports: DirectionalPorts::default(),
+        }
     }
 
     #[must_use]
@@ -192,49 +185,8 @@ impl PortsWidget {
     }
 }
 
-/// The following functions must be called from the AppController thread,
-/// not the UI update thread.
 impl PortsWidget {
-    fn update(&mut self) {
-        self.ports.update_from(&self.midi_ports);
-    }
-
-    pub fn refresh_ports(&mut self) -> Result<(), Error> {
-        self.midi_ports.refresh()?;
-        self.update();
-
-        Ok(())
-    }
-
-    pub fn connect(
-        &mut self,
-        port_nb: midi::PortNb,
-        port_name: Arc<str>,
-        msg_tx: channel::Sender<midi::msg::Result>,
-    ) -> Result<(), Error> {
-        let callback = move |ts, buf: &[u8]| {
-            let origin = midi::msg::Origin::new(ts, port_nb, buf);
-            match midi_msg::MidiMsg::from_midi(&origin.buffer) {
-                Ok((msg, _len)) => {
-                    msg_tx.send(Ok(midi::Msg { origin, msg })).unwrap();
-                }
-                Err(err) => {
-                    log::error!("Failed to parse Midi buffer: {}", err);
-                    msg_tx.send(Err(midi::msg::Error { origin, err })).unwrap();
-                }
-            }
-        };
-
-        self.midi_ports.connect(port_nb, port_name, callback)?;
-        self.update();
-
-        Ok(())
-    }
-
-    pub fn disconnect(&mut self, port_nb: midi::PortNb) -> Result<(), Error> {
-        self.midi_ports.disconnect(port_nb)?;
-        self.update();
-
-        Ok(())
+    pub fn update(&mut self, midi_ports: &midi::Ports) {
+        self.ports.update_from(midi_ports);
     }
 }
