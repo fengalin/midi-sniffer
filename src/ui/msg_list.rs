@@ -201,22 +201,20 @@ impl MsgListWidget {
 
 impl MsgListWidget {
     #[must_use]
-    pub fn extend(&mut self, msg_iter: impl Iterator<Item = midi::msg::Result>) -> Status {
+    pub fn push(&mut self, msg: midi::msg::Result) -> Status {
         let mut status = Status::Unchanged;
 
-        for msg in msg_iter {
-            match self.list.last_mut() {
-                Some(last) if last.as_ref() == &msg => {
-                    if last.repetitions < MAX_REPETITIONS {
-                        Arc::make_mut(last).repetitions += 1;
-                        status.updated();
-                    }
-                }
-                _ => {
-                    let parse_res: MsgParseResult = msg.into();
-                    self.list.push(parse_res.into());
+        match self.list.last_mut() {
+            Some(last) if last.as_ref() == &msg => {
+                if last.repetitions < MAX_REPETITIONS {
+                    Arc::make_mut(last).repetitions += 1;
                     status.updated();
                 }
+            }
+            _ => {
+                let parse_res: MsgParseResult = msg.into();
+                self.list.push(parse_res.into());
+                status.updated();
             }
         }
 

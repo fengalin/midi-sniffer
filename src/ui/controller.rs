@@ -3,15 +3,10 @@ use eframe::epi;
 use std::{
     ops::ControlFlow,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
 };
 
 use super::app;
 use crate::midi;
-
-const MSG_POLLING_INTERVAL: Duration = Duration::from_millis(20);
-const MSG_LIST_BATCH_SIZE: usize = 5;
-const MAX_MSG_BATCHES_PER_UPDATE: usize = 30 / MSG_LIST_BATCH_SIZE;
 
 pub struct Spawner {
     pub req_rx: channel::Receiver<app::Request>,
@@ -24,23 +19,20 @@ pub struct Spawner {
 impl Spawner {
     pub fn spawn(self) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || {
-            let _ = Controller::try_new(
+            let _ = Controller::run(
                 self.req_rx,
                 self.err_tx,
                 self.msg_list_widget,
                 self.client_name,
                 self.ports_widget,
-            )
-            .map(Controller::run);
+            );
         })
     }
 }
 
 struct Controller {
-    req_rx: channel::Receiver<app::Request>,
     err_tx: channel::Sender<app::Error>,
 
-    msg_rx: channel::Receiver<midi::msg::Result>,
     msg_tx: channel::Sender<midi::msg::Result>,
     msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
 
@@ -52,13 +44,13 @@ struct Controller {
 }
 
 impl Controller {
-    fn try_new(
+    fn run(
         req_rx: channel::Receiver<app::Request>,
         err_tx: channel::Sender<app::Error>,
         msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
         client_name: Arc<str>,
         ports_widget: Arc<Mutex<super::PortsWidget>>,
-    ) -> Result<Self, ()> {
+    ) -> Result<(), ()> {
         let midi_ports = midi::Ports::try_new(client_name).map_err(|err| {
             log::error!("Error creating Controller: {}", err);
             let _ = err_tx.send(err.into());
@@ -66,11 +58,9 @@ impl Controller {
 
         let (msg_tx, msg_rx) = channel::unbounded();
 
-        Ok(Self {
-            req_rx,
+        Self {
             err_tx,
 
-            msg_rx,
             msg_tx,
             msg_list_widget,
 
@@ -79,7 +69,10 @@ impl Controller {
 
             must_repaint: false,
             frame: None,
-        })
+        }
+        .run_loop(req_rx, msg_rx);
+
+        Ok(())
     }
 
     fn handle(&mut self, request: app::Request) -> Result<ControlFlow<(), ()>, app::Error> {
@@ -132,42 +125,43 @@ impl Controller {
         Ok(())
     }
 
-    fn try_receive_request(&mut self) -> Option<app::Request> {
-        let request = self
-            .req_rx
-            .recv_deadline(Instant::now() + MSG_POLLING_INTERVAL);
-        for _nb in 0..MAX_MSG_BATCHES_PER_UPDATE {
-            // Update msg list widget with batches of at most
-            // MSG_LIST_BATCH_SIZE messages so as not to lock the widget for too long.
-            let mut msg_batch_iter = self.msg_rx.try_iter().take(MSG_LIST_BATCH_SIZE).peekable();
-            if msg_batch_iter.peek().is_none() {
-                break;
-            }
-
-            self.must_repaint =
-                { self.msg_list_widget.lock().unwrap().extend(msg_batch_iter) }.was_updated();
+    fn run_loop(
+        mut self,
+        req_rx: channel::Receiver<app::Request>,
+        msg_rx: channel::Receiver<midi::msg::Result>,
+    ) {
+        if let Err(err) = self.refresh_ports() {
+            let _ = self.err_tx.send(err);
         }
 
-        match request {
-            Ok(request) => Some(request),
-            Err(channel::RecvTimeoutError::Timeout) => None,
-            Err(err) => panic!("{}", err),
-        }
-    }
-
-    fn run(mut self) {
         loop {
-            if let Err(err) = self.refresh_ports() {
-                let _ = self.err_tx.send(err);
-            }
-
-            if let Some(request) = self.try_receive_request() {
-                match self.handle(request) {
-                    Ok(ControlFlow::Continue(())) => (),
-                    Ok(ControlFlow::Break(())) => break,
-                    Err(err) => {
-                        // Propagate the error
-                        let _ = self.err_tx.send(err);
+            channel::select! {
+                recv(req_rx) -> request =>  {
+                    match request {
+                        Ok(request) => match self.handle(request) {
+                            Ok(ControlFlow::Continue(())) => (),
+                            Ok(ControlFlow::Break(())) => break,
+                            Err(err) => {
+                                log::error!("{err}");
+                                let _ = self.err_tx.send(err);
+                            }
+                        }
+                        Err(err) => {
+                            log::error!("Error UI request channel: {err}");
+                            break;
+                        }
+                    }
+                }
+                recv(msg_rx) -> msg =>  {
+                    match msg {
+                        Ok(msg) => {
+                            self.must_repaint =
+                            { self.msg_list_widget.lock().unwrap().push(msg) }.was_updated();
+                        }
+                        Err(err) => {
+                            log::error!("Error MIDI message channel: {err}");
+                            break;
+                        }
                     }
                 }
             }
