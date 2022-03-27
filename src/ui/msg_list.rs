@@ -35,7 +35,43 @@ pub struct MsgParseResult {
     #[cfg_attr(feature = "save", serde(rename = "parsed"))]
     res_str: Arc<str>,
 
-    buffer: Arc<[u8]>,
+    buffer: Buffer,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Buffer(Arc<[u8]>);
+
+impl PartialEq<[u8]> for Buffer {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.0.as_ref().eq(other)
+    }
+}
+
+impl From<Arc<[u8]>> for Buffer {
+    fn from(buf: Arc<[u8]>) -> Self {
+        Self(buf)
+    }
+}
+
+fn write_data(w: &mut dyn fmt::Write, data: &[u8]) -> std::fmt::Result {
+    write!(w, "(hex)")?;
+    for val in data {
+        write!(w, " {val:02x}")?;
+    }
+
+    Ok(())
+}
+
+/// Serialize as hex printable values.
+#[cfg(feature = "save")]
+impl<'a> serde::Serialize for Buffer {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut data_str = String::new();
+        write_data(&mut data_str, self.0.as_ref())
+            .map_err(|_| serde::ser::Error::custom("Couldn't write `buffer` as string"))?;
+
+        serializer.serialize_str(&data_str)
+    }
 }
 
 impl PartialEq<midi::msg::Result> for MsgParseResult {
@@ -44,7 +80,7 @@ impl PartialEq<midi::msg::Result> for MsgParseResult {
             Ok(ok) => &ok.origin,
             Err(err) => &err.origin,
         };
-        self.port_nb == other_origin.port_nb && self.buffer == other_origin.buffer
+        self.port_nb == other_origin.port_nb && self.buffer == *other_origin.buffer
     }
 }
 
@@ -60,7 +96,7 @@ impl From<midi::msg::Result> for MsgParseResult {
                     port_nb: ok.origin.port_nb,
                     repetitions: 1,
                     res_str: res_str.into(),
-                    buffer: ok.origin.buffer,
+                    buffer: ok.origin.buffer.into(),
                     is_err: false,
                 }
             }
@@ -69,7 +105,7 @@ impl From<midi::msg::Result> for MsgParseResult {
                 port_nb: err.origin.port_nb,
                 repetitions: 1,
                 res_str: format!("{}", err.err).into(),
-                buffer: err.origin.buffer,
+                buffer: err.origin.buffer.into(),
                 is_err: true,
             },
         }
@@ -268,35 +304,115 @@ impl MsgListWidget {
     }
 }
 
+fn write_cc_msg(w: &mut dyn fmt::Write, msg: &midi_msg::ControlChange) -> std::fmt::Result {
+    use midi_msg::ControlChange::*;
+    match msg {
+        BankSelect(val) => write!(w, "Bank Select {val}"),
+        ModWheel(val) => write!(w, "Mod Wheel {val}"),
+        Breath(val) => write!(w, "Breath {val}"),
+        Undefined { control, value } => {
+            write!(w, "Undef ctrl {control} val {value}")
+        }
+        UndefinedHighRes {
+            control1,
+            control2,
+            value,
+        } => write!(
+            w,
+            "Undef High Res ctrl ({control1}, {control2}) val {value}"
+        ),
+        Foot(val) => write!(w, "Foot {val}"),
+        Portamento(val) => write!(w, "Portamento {val}"),
+        Volume(val) => write!(w, "Volume {val}"),
+        Balance(val) => write!(w, "Balance {val}"),
+        Pan(val) => write!(w, "Pan {val}"),
+        Expression(val) => write!(w, "Expression {val}"),
+        Effect1(val) => write!(w, "Effect 1 {val}"),
+        Effect2(val) => write!(w, "Effect 2 {val}"),
+        GeneralPurpose1(val) => write!(w, "General Purpose 1 {val}"),
+        GeneralPurpose2(val) => write!(w, "General Purpose 2 {val}"),
+        GeneralPurpose3(val) => write!(w, "General Purpose 3 {val}"),
+        GeneralPurpose4(val) => write!(w, "General Purpose 4 {val}"),
+        GeneralPurpose5(val) => write!(w, "General Purpose 5 {val}"),
+        GeneralPurpose6(val) => write!(w, "General Purpose 6 {val}"),
+        GeneralPurpose7(val) => write!(w, "General Purpose 7 {val}"),
+        GeneralPurpose8(val) => write!(w, "General Purpose 8 {val}"),
+        Hold(val) => write!(w, "Hold {val}"),
+        Hold2(val) => write!(w, "Hold 2 {val}"),
+        TogglePortamento(val) => write!(w, "Toggle Portamento {val}"),
+        Sostenuto(val) => write!(w, "Sostenuto {val}"),
+        SoftPedal(val) => write!(w, "Soft Pedal {val}"),
+        ToggleLegato(val) => write!(w, "Toggle Legato {val}"),
+        SoundVariation(val) => write!(w, "Sound Variation {val}"),
+        Timbre(val) => write!(w, "Timbre {val}"),
+        ReleaseTime(val) => write!(w, "Release Time {val}"),
+        AttackTime(val) => write!(w, "Attack Time {val}"),
+        Brightness(val) => write!(w, "Brightness {val}"),
+        DecayTime(val) => write!(w, "Decay Time {val}"),
+        VibratoRate(val) => write!(w, "Vibrato Rate {val}"),
+        VibratoDepth(val) => write!(w, "Vibrato Depth {val}"),
+        VibratoDelay(val) => write!(w, "Vibrato Delay {val}"),
+        SoundControl1(val) => write!(w, "Sound Ctrl 1 {val}"),
+        SoundControl2(val) => write!(w, "Sound Ctrl 2 {val}"),
+        SoundControl3(val) => write!(w, "Sound Ctrl 3 {val}"),
+        SoundControl4(val) => write!(w, "Sound Ctrl 4 {val}"),
+        SoundControl5(val) => write!(w, "Sound Ctrl 5 {val}"),
+        SoundControl6(val) => write!(w, "Sound Ctrl 6 {val}"),
+        SoundControl7(val) => write!(w, "Sound Ctrl 7 {val}"),
+        SoundControl8(val) => write!(w, "Sound Ctrl 8 {val}"),
+        SoundControl9(val) => write!(w, "Sound Ctrl 9 {val}"),
+        SoundControl10(val) => write!(w, "Sound Ctrl 10 {val}"),
+        HighResVelocity(val) => write!(w, "High Res Velocity {val}"),
+        PortamentoControl(val) => write!(w, "Portamento Control {val}"),
+        Effects1Depth(val) => write!(w, "Effects 1 Depth {val}"),
+        Effects2Depth(val) => write!(w, "Effects 2 Depth {val}"),
+        Effects3Depth(val) => write!(w, "Effects 3 Depth {val}"),
+        Effects4Depth(val) => write!(w, "Effects 4 Depth {val}"),
+        Effects5Depth(val) => write!(w, "Effects 5 Depth {val}"),
+        ReverbSendLevel(val) => write!(w, "Reverb Send Level {val}"),
+        TremoloDepth(val) => write!(w, "Tremolo Depth {val}"),
+        ChorusSendLevel(val) => write!(w, "Chorus Send Level {val}"),
+        CelesteDepth(val) => write!(w, "Celeste Depth {val}"),
+        PhaserDepth(val) => write!(w, "Phaser Depth {val}"),
+        Parameter(param) => write!(w, "Parameter {param:?}"),
+        DataEntry(val) => write!(w, "Data Entry w{val:04x}"),
+        DataEntry2(val1, val2) => write!(w, "Data Entry 2 x{val1:02x} x{val2:02x}"),
+        DataIncrement(val) => write!(w, "Data Inc {val}"),
+        DataDecrement(val) => write!(w, "Data Dec {val}"),
+    }
+}
+
 fn write_chan_voice_msg(
     w: &mut dyn fmt::Write,
     msg: &midi_msg::ChannelVoiceMsg,
 ) -> std::fmt::Result {
     use midi_msg::ChannelVoiceMsg::*;
     match msg {
-        NoteOn {
-            ref note,
-            ref velocity,
-        } => write!(w, "Note {} On vel. {}", note, velocity),
-        NoteOff { note, velocity } => write!(w, "Note {} Off vel. {}", note, velocity),
-        ControlChange { control } => write!(w, "CC {:?}", control),
+        NoteOn { note, velocity } => write!(w, "Note {note} On vel. {velocity}"),
+        NoteOff { note, velocity } => write!(w, "Note {note} Off vel. {velocity}"),
+        ControlChange { control } => {
+            write!(w, "CC ")?;
+            write_cc_msg(w, control)
+        }
         HighResNoteOn { note, velocity } => {
-            write!(w, "High Res Note {} On vel. {}", note, velocity)
+            write!(w, "High Res Note {note} On vel. {velocity}")
         }
         HighResNoteOff { note, velocity } => {
-            write!(w, "High Res Note {} Off vel. {}", note, velocity)
+            write!(w, "High Res Note {note} Off vel. {velocity}")
         }
-        PolyPressure { note, pressure } => write!(w, "Poly {} Pressure {}", note, pressure),
-        ChannelPressure { pressure } => write!(w, "Channel Pressure {}", pressure),
-        ProgramChange { program } => write!(w, "Program Change {}", program),
-        PitchBend { bend } => write!(w, "Pitch Bend {}", bend),
+        PolyPressure { note, pressure } => {
+            write!(w, "Poly Note {note} Pressure {pressure}")
+        }
+        ChannelPressure { pressure } => write!(w, "Channel Pressure {pressure}"),
+        ProgramChange { program } => write!(w, "Program Change {program}"),
+        PitchBend { bend } => write!(w, "Pitch Bend {bend}"),
     }
 }
 
 fn write_poly_mode(w: &mut dyn fmt::Write, pm: &midi_msg::PolyMode) -> std::fmt::Result {
     use midi_msg::PolyMode::*;
     match pm {
-        Mono(n_chans) => write!(w, "Mono {} chan(s)", n_chans),
+        Mono(n_chans) => write!(w, "Mono {n_chans} chan(s)"),
         Poly => w.write_str("Poly"),
     }
 }
@@ -307,12 +423,12 @@ fn write_chan_mode_msg(w: &mut dyn fmt::Write, msg: &midi_msg::ChannelModeMsg) -
         AllSoundOff => w.write_str("All Sound Off"),
         AllNotesOff => w.write_str("All Notes Off"),
         ResetAllControllers => w.write_str("Reset All Controllers"),
-        OmniMode(om) => write!(w, "Onmi Mode {}", om),
+        OmniMode(om) => write!(w, "Onmi Mode {om}"),
         PolyMode(pm) => {
             w.write_str("Poly Mode ")?;
             write_poly_mode(w, pm)
         }
-        LocalControl(lc) => write!(w, "Local Control {}", lc),
+        LocalControl(lc) => write!(w, "Local Control {lc}"),
     }
 }
 
@@ -370,8 +486,8 @@ fn write_sys_com_msg(w: &mut dyn fmt::Write, msg: &midi_msg::SystemCommonMsg) ->
             w.write_str("Time Code ¼ Frame 8 ")?;
             write_time_code(w, tc)
         }
-        SongPosition(pos) => write!(w, "Song Pos. {}", pos),
-        SongSelect(sel) => write!(w, "Song Sel. {}", sel),
+        SongPosition(pos) => write!(w, "Song Pos. {pos}"),
+        SongSelect(sel) => write!(w, "Song Sel. {sel}"),
         TuneRequest => write!(w, "Tune Req."),
     }
 }
@@ -398,14 +514,14 @@ fn write_universal_rt_msg(
             write!(w, "Full Time Code ")?;
             write_time_code(w, tc)
         }
-        TimeCodeUserBits(user_bits) => write!(w, "Time Code {:?}", user_bits),
-        ShowControl(show_ctrl) => write!(w, "Show Ctrl {:?}", show_ctrl),
-        TimeSignature(t_sign) => write!(w, "Time Sign. {:?}", t_sign),
-        TimeSignatureDelayed(t_sign) => write!(w, "Time Sign. delayed {:?}", t_sign),
-        MasterVolume(val) => write!(w, "Master Vol. {}", val),
-        MasterBalance(val) => write!(w, "Master Balance {}", val),
-        MasterFineTuning(val) => write!(w, "Master fine Tuning {}", val),
-        MasterCoarseTuning(val) => write!(w, "Master coarse Tuning {}", val),
+        TimeCodeUserBits(user_bits) => write!(w, "Time Code {user_bits:?}"),
+        ShowControl(show_ctrl) => write!(w, "Show Ctrl {show_ctrl:?}"),
+        TimeSignature(t_sign) => write!(w, "Time Sign. {t_sign:?}"),
+        TimeSignatureDelayed(t_sign) => write!(w, "Time Sign. delayed {t_sign:?}"),
+        MasterVolume(val) => write!(w, "Master Vol. {val}"),
+        MasterBalance(val) => write!(w, "Master Balance {val}"),
+        MasterFineTuning(val) => write!(w, "Master fine Tuning {val}"),
+        MasterCoarseTuning(val) => write!(w, "Master coarse Tuning {val}"),
         other => write!(w, "{:?}", other),
     }
 }
@@ -413,13 +529,19 @@ fn write_universal_rt_msg(
 fn write_sysex_msg(w: &mut dyn fmt::Write, msg: &midi_msg::SystemExclusiveMsg) -> std::fmt::Result {
     use midi_msg::SystemExclusiveMsg::*;
     match msg {
-        Commercial { id, data } => write!(w, "{:?} {:?}", id, data),
-        NonCommercial { data } => write!(w, "Non-com. {:?}", data),
+        Commercial { id, data } => {
+            write!(w, "{id:?} data ")?;
+            write_data(w, data)
+        }
+        NonCommercial { data } => {
+            write!(w, "Non-com. data ")?;
+            write_data(w, data)
+        }
         UniversalRealTime { device, msg } => {
-            write!(w, "{:?} ", device)?;
+            write!(w, "UniRT {device:?} ")?;
             write_universal_rt_msg(w, msg)
         }
-        UniversalNonRealTime { device, msg } => write!(w, "{:?} {:?}", device, msg),
+        UniversalNonRealTime { device, msg } => write!(w, "UniNonRT {device:?} {msg:?}"),
     }
 }
 
@@ -427,31 +549,31 @@ fn write_midi_msg(w: &mut dyn fmt::Write, msg: &midi_msg::MidiMsg) -> std::fmt::
     use midi_msg::MidiMsg::*;
     match msg {
         ChannelVoice { channel, msg } => {
-            write!(w, "{:?} Voice ", channel)?;
+            write!(w, "{channel:?} Voice ")?;
             write_chan_voice_msg(w, msg)
         }
         RunningChannelVoice { channel, msg } => {
-            write!(w, "{:?} Voice (running) ", channel)?;
+            write!(w, "{channel:?} Voice (running) ")?;
             write_chan_voice_msg(w, msg)
         }
         ChannelMode { channel, msg } => {
-            write!(w, "{:?} Mode ", channel)?;
+            write!(w, "{channel:?} Mode ")?;
             write_chan_mode_msg(w, msg)
         }
         RunningChannelMode { channel, msg } => {
-            write!(w, "{:?} Mode (running) ", channel)?;
+            write!(w, "{channel:?} Mode (running) ")?;
             write_chan_mode_msg(w, msg)
         }
         SystemCommon { msg } => {
-            w.write_str("Sys. Com. ")?;
+            w.write_str("SysCom ")?;
             write_sys_com_msg(w, msg)
         }
         SystemRealTime { msg } => {
-            w.write_str("Sys. RT ")?;
+            w.write_str("SysRT ")?;
             write_sys_rt_msg(w, msg)
         }
         SystemExclusive { msg } => {
-            w.write_str("Sys. Ex. ")?;
+            w.write_str("SysEx ")?;
             write_sysex_msg(w, msg)
         }
     }
