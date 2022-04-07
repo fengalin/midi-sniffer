@@ -33,7 +33,7 @@ impl Spawner {
 struct Controller {
     err_tx: channel::Sender<app::Error>,
 
-    msg_tx: channel::Sender<midi::msg::Result>,
+    midi_tx: channel::Sender<midi::msg::Origin>,
     msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
 
     midi_ports: midi::Ports,
@@ -56,12 +56,12 @@ impl Controller {
             let _ = err_tx.send(err.into());
         })?;
 
-        let (msg_tx, msg_rx) = channel::unbounded();
+        let (midi_tx, midi_rx) = channel::unbounded();
 
         Self {
             err_tx,
 
-            msg_tx,
+            midi_tx,
             msg_list_panel,
 
             midi_ports,
@@ -70,7 +70,7 @@ impl Controller {
             must_repaint: false,
             frame: None,
         }
-        .run_loop(req_rx, msg_rx);
+        .run_loop(req_rx, midi_rx);
 
         Ok(())
     }
@@ -91,18 +91,11 @@ impl Controller {
     }
 
     fn connect(&mut self, port_nb: midi::PortNb, port_name: Arc<str>) -> Result<(), app::Error> {
-        let msg_tx = self.msg_tx.clone();
+        let midi_tx = self.midi_tx.clone();
         let callback = move |ts, buf: &[u8]| {
-            let origin = midi::msg::Origin::new(ts, port_nb, buf);
-            match midi_msg::MidiMsg::from_midi(&origin.buffer) {
-                Ok((msg, _len)) => {
-                    msg_tx.send(Ok(midi::Msg { origin, msg })).unwrap();
-                }
-                Err(err) => {
-                    log::error!("Failed to parse Midi buffer: {}", err);
-                    msg_tx.send(Err(midi::msg::Error { origin, err })).unwrap();
-                }
-            }
+            midi_tx
+                .send(midi::msg::Origin::new(ts, port_nb, buf))
+                .unwrap();
         };
 
         self.midi_ports.connect(port_nb, port_name, callback)?;
@@ -128,7 +121,7 @@ impl Controller {
     fn run_loop(
         mut self,
         req_rx: channel::Receiver<app::Request>,
-        msg_rx: channel::Receiver<midi::msg::Result>,
+        midi_rx: channel::Receiver<midi::msg::Origin>,
     ) {
         if let Err(err) = self.refresh_ports() {
             let _ = self.err_tx.send(err);
@@ -152,11 +145,19 @@ impl Controller {
                         }
                     }
                 }
-                recv(msg_rx) -> msg =>  {
-                    match msg {
-                        Ok(msg) => {
+                recv(midi_rx) -> midi_msg =>  {
+                    match midi_msg {
+                        Ok(origin) => {
+                            let res = match midi_msg::MidiMsg::from_midi(&origin.buffer) {
+                                Ok((msg, _len)) => Ok(midi::Msg { origin, msg }),
+                                Err(err) => {
+                                    log::error!("Failed to parse Midi buffer: {err}");
+                                    Err(midi::msg::Error { origin, err })
+                                }
+                            };
+
                             self.must_repaint =
-                            { self.msg_list_panel.lock().unwrap().push(msg) }.was_updated();
+                                { self.msg_list_panel.lock().unwrap().push(res) }.was_updated();
                         }
                         Err(err) => {
                             log::error!("Error MIDI message channel: {err}");
