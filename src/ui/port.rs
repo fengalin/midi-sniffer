@@ -99,11 +99,11 @@ pub enum Response {
     CheckingList,
 }
 
-pub struct PortsWidget {
+pub struct PortsPanel {
     pub ports: DirectionalPorts,
 }
 
-impl PortsWidget {
+impl PortsPanel {
     pub fn new() -> Self {
         Self {
             ports: DirectionalPorts::default(),
@@ -185,7 +185,7 @@ impl PortsWidget {
     }
 }
 
-impl PortsWidget {
+impl PortsPanel {
     pub fn update(&mut self, midi_ports: &midi::Ports) {
         self.ports.update_from(midi_ports);
     }

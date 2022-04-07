@@ -11,9 +11,9 @@ use crate::midi;
 pub struct Spawner {
     pub req_rx: channel::Receiver<app::Request>,
     pub err_tx: channel::Sender<app::Error>,
-    pub msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
+    pub msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
     pub client_name: Arc<str>,
-    pub ports_widget: Arc<Mutex<super::PortsWidget>>,
+    pub ports_panel: Arc<Mutex<super::PortsPanel>>,
 }
 
 impl Spawner {
@@ -22,9 +22,9 @@ impl Spawner {
             let _ = Controller::run(
                 self.req_rx,
                 self.err_tx,
-                self.msg_list_widget,
+                self.msg_list_panel,
                 self.client_name,
-                self.ports_widget,
+                self.ports_panel,
             );
         })
     }
@@ -34,10 +34,10 @@ struct Controller {
     err_tx: channel::Sender<app::Error>,
 
     msg_tx: channel::Sender<midi::msg::Result>,
-    msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
+    msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
 
     midi_ports: midi::Ports,
-    ports_widget: Arc<Mutex<super::PortsWidget>>,
+    ports_panel: Arc<Mutex<super::PortsPanel>>,
 
     must_repaint: bool,
     frame: Option<epi::Frame>,
@@ -47,9 +47,9 @@ impl Controller {
     fn run(
         req_rx: channel::Receiver<app::Request>,
         err_tx: channel::Sender<app::Error>,
-        msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
+        msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
         client_name: Arc<str>,
-        ports_widget: Arc<Mutex<super::PortsWidget>>,
+        ports_panel: Arc<Mutex<super::PortsPanel>>,
     ) -> Result<(), ()> {
         let midi_ports = midi::Ports::try_new(client_name).map_err(|err| {
             log::error!("Error creating Controller: {}", err);
@@ -62,10 +62,10 @@ impl Controller {
             err_tx,
 
             msg_tx,
-            msg_list_widget,
+            msg_list_panel,
 
             midi_ports,
-            ports_widget,
+            ports_panel,
 
             must_repaint: false,
             frame: None,
@@ -120,7 +120,7 @@ impl Controller {
 
     fn refresh_ports(&mut self) -> Result<(), app::Error> {
         self.midi_ports.refresh()?;
-        self.ports_widget.lock().unwrap().update(&self.midi_ports);
+        self.ports_panel.lock().unwrap().update(&self.midi_ports);
 
         Ok(())
     }
@@ -156,7 +156,7 @@ impl Controller {
                     match msg {
                         Ok(msg) => {
                             self.must_repaint =
-                            { self.msg_list_widget.lock().unwrap().push(msg) }.was_updated();
+                            { self.msg_list_panel.lock().unwrap().push(msg) }.was_updated();
                         }
                         Err(err) => {
                             log::error!("Error MIDI message channel: {err}");

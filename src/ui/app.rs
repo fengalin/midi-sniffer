@@ -29,10 +29,10 @@ pub enum Request {
 }
 
 pub struct App {
-    msg_list_widget: Arc<Mutex<super::MsgListWidget>>,
+    msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
     req_tx: channel::Sender<Request>,
     err_rx: channel::Receiver<Error>,
-    ports_widget: Arc<Mutex<super::PortsWidget>>,
+    ports_panel: Arc<Mutex<super::PortsPanel>>,
     last_err: Option<Error>,
     controller_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -42,23 +42,23 @@ impl App {
         let (err_tx, err_rx) = channel::unbounded();
         let (req_tx, req_rx) = channel::unbounded();
 
-        let ports_widget = Arc::new(Mutex::new(super::PortsWidget::new()));
-        let msg_list_widget = Arc::new(Mutex::new(super::MsgListWidget::new(err_tx.clone())));
+        let ports_panel = Arc::new(Mutex::new(super::PortsPanel::new()));
+        let msg_list_panel = Arc::new(Mutex::new(super::MsgListPanel::new(err_tx.clone())));
 
         let controller_thread = controller::Spawner {
             req_rx,
             err_tx,
-            msg_list_widget: msg_list_widget.clone(),
+            msg_list_panel: msg_list_panel.clone(),
             client_name: Arc::from(client_name),
-            ports_widget: ports_widget.clone(),
+            ports_panel: ports_panel.clone(),
         }
         .spawn();
 
         Ok(Self {
-            msg_list_widget,
+            msg_list_panel,
             req_tx,
             err_rx,
-            ports_widget,
+            ports_panel,
             last_err: None,
             controller_thread: Some(controller_thread),
         })
@@ -71,28 +71,22 @@ impl epi::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("MIDI Sniffer");
-
+        egui::TopBottomPanel::top("top-area").show(ctx, |ui| {
             ui.add_space(10f32);
+            ui.heading("MIDI Sniffer");
+            ui.add_space(10f32);
+            ui.horizontal(|ui| {
+                use crate::midi::PortNb;
 
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    use crate::midi::PortNb;
+                let resp1 = self.ports_panel.lock().unwrap().show(PortNb::One, ui);
+                let resp2 = self.ports_panel.lock().unwrap().show(PortNb::Two, ui);
 
-                    let resp1 = self.ports_widget.lock().unwrap().show(PortNb::One, ui);
-                    let resp2 = self.ports_widget.lock().unwrap().show(PortNb::Two, ui);
-
-                    Dispatcher::<super::PortsWidget>::handle(self, resp1.or(resp2));
-                });
-
-                ui.add_space(2f32);
-                ui.separator();
-                ui.add_space(2f32);
-
-                self.msg_list_widget.lock().unwrap().show(ui);
+                Dispatcher::<super::PortsPanel>::handle(self, resp1.or(resp2));
             });
+            ui.add_space(5f32);
+        });
 
+        egui::TopBottomPanel::bottom("status-area").show(ctx, |ui| {
             self.pop_err();
             if let Some(ref err) = self.last_err {
                 ui.add_space(5f32);
@@ -108,6 +102,10 @@ impl epi::App for App {
                 });
             }
         });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.msg_list_panel.lock().unwrap().show(ui);
+        });
     }
 
     fn setup(
@@ -119,17 +117,17 @@ impl epi::App for App {
         ctx.set_visuals(egui::Visuals::dark());
         self.have_frame(frame.clone());
 
-        let resps = self.ports_widget.lock().unwrap().setup(storage);
+        let resps = self.ports_panel.lock().unwrap().setup(storage);
         for resp in resps {
-            Dispatcher::<super::PortsWidget>::handle(self, Some(resp));
+            Dispatcher::<super::PortsPanel>::handle(self, Some(resp));
         }
 
-        self.msg_list_widget.lock().unwrap().setup(storage);
+        self.msg_list_panel.lock().unwrap().setup(storage);
     }
 
     fn save(&mut self, storage: &mut dyn epi::Storage) {
-        self.ports_widget.lock().unwrap().save(storage);
-        self.msg_list_widget.lock().unwrap().save(storage);
+        self.ports_panel.lock().unwrap().save(storage);
+        self.msg_list_panel.lock().unwrap().save(storage);
         self.clear_last_err();
     }
 

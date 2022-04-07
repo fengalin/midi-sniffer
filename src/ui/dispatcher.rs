@@ -2,7 +2,7 @@ use super::{app, App};
 
 pub struct Dispatcher<T>(std::marker::PhantomData<*const T>);
 
-impl Dispatcher<super::PortsWidget> {
+impl Dispatcher<super::PortsPanel> {
     pub fn handle(app: &mut App, resp: Option<super::port::Response>) {
         if let Some(resp) = resp {
             use super::port::Response::*;

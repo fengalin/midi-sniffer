@@ -127,14 +127,14 @@ impl Status {
     }
 }
 
-pub struct MsgListWidget {
+pub struct MsgListPanel {
     pub list: Vec<Arc<MsgParseResult>>,
     follows_cursor: bool,
     err_tx: channel::Sender<super::app::Error>,
     msg_list_dir: Arc<Mutex<PathBuf>>,
 }
 
-impl MsgListWidget {
+impl MsgListPanel {
     pub fn new(err_tx: channel::Sender<super::app::Error>) -> Self {
         Self {
             list: Vec::new(),
@@ -145,7 +145,7 @@ impl MsgListWidget {
     }
 }
 
-impl MsgListWidget {
+impl MsgListPanel {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -235,7 +235,7 @@ impl MsgListWidget {
     }
 }
 
-impl MsgListWidget {
+impl MsgListPanel {
     #[must_use]
     pub fn push(&mut self, msg: midi::msg::Result) -> Status {
         let mut status = Status::Unchanged;

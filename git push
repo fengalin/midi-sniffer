@@ -1,0 +1,112 @@
+[33mcommit eacc4bbd82cba2ac09d7ff0deba1180920e5810c[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m)[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Sun Mar 27 17:00:56 2022 +0200
+
+    ui: improve MIDI messages display
+    
+    - CC pretty printing.
+    - hex values for raw data.
+
+[33mcommit 1deb6be751dce5bcc3bc054cdfc837a5a76902b8[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Sat Mar 26 23:43:37 2022 +0100
+
+    ui/controller: don't actively poll msg_rx
+    
+    Use channel::select! to passively wait for UI requests and
+    MIDI messages.
+
+[33mcommit c07a5604d7d4fa9dbfe855a135fa93c0ad3210b5[m[33m ([m[1;31morigin/main[m[33m)[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Fri Mar 25 22:04:43 2022 +0100
+
+    Move midi::Ports to Controller
+    
+    PortsWidget should not control midi::Ports, this allowed accessing
+    Midi functions from the UI thread.
+
+[33mcommit febb3b50ac124f1e490ab472eb70e0a9b2c3f46f[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Fri Mar 25 19:36:23 2022 +0100
+
+    ui: move Dispatcher and Controller in their own module
+
+[33mcommit 3205b28b1cd5dd011962a0d4e8fe20c8abe52631[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 23 15:03:45 2022 +0100
+
+    Update screenshot
+
+[33mcommit 05253bdf2e210a5db01d532f380b2a528294dabf[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 23 15:03:13 2022 +0100
+
+    Update dependencies
+
+[33mcommit 4cac0b65480c07caf5df5b01eac29649028cfab7[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 23 12:54:41 2022 +0100
+
+    Persist port connections and saving directory
+
+[33mcommit 44ffb50b02d45b536cca2c17c033eb5ef0cbab55[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 23 11:15:53 2022 +0100
+
+    Auto-refresh port lists when opening port comboboxes
+    
+    ... also clear the last error message.
+
+[33mcommit 66d5c9d615bb473aecfab7640c2a3f79716914a8[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 23 01:00:21 2022 +0100
+
+    Propagate save error to UI
+    
+    Also:
+    
+    - Fix compilation with no default features.
+    - Fix error message not being retained.
+    - Fix various error messages.
+
+[33mcommit 2287507b657ba14f61e5c3e4bb9045c9cd98f614[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Mon Mar 21 20:28:59 2022 +0100
+
+    Very early message list saving support
+
+[33mcommit 496e7af213b7c179b7c35126c18e5f3fd7fb9d2f[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Sat Mar 19 00:14:11 2022 +0100
+
+    Fix port comboboxes not being refreshed
+
+[33mcommit 720a6f28f7d9516576260c370248bdf938b50c01[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Fri Mar 18 23:39:55 2022 +0100
+
+    Some more rework
+
+[33mcommit 6a144b5926dcd0fd4f8e97688977daded2061c4c[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Thu Mar 17 21:08:39 2022 +0100
+
+    A slight rework
+
+[33mcommit 1c5554d01a400a70d57a12208543ef1ee572dcde[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 16 17:50:46 2022 +0100
+
+    Add readme license and screenshot
+
+[33mcommit a40c16d2fddea31f40f4eee9fbf3b504184429bd[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Wed Mar 16 16:54:13 2022 +0100
+
+    Dual ports version
+
+[33mcommit de62b6d89bb8637b09c1017cba9cf0ff9950eaf7[m
+Author: François Laignel <fengalin@free.fr>
+Date:   Tue Mar 15 19:20:42 2022 +0100
+
+    Single port version
