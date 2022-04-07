@@ -131,6 +131,11 @@ impl epi::App for App {
         self.clear_last_err();
     }
 
+    fn persist_egui_memory(&self) -> bool {
+        // Don't persist otherwise this keeps columns and row sizes.
+        false
+    }
+
     fn on_exit(&mut self) {
         log::info!("Shutting down");
         self.shutdown();

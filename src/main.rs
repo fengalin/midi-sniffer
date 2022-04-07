@@ -1,3 +1,5 @@
+pub mod bytes;
+
 pub mod midi;
 pub use midi::MidiIn;
 

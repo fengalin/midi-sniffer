@@ -6,11 +6,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::midi::{self, PortNb};
+use crate::{
+    bytes,
+    midi::{self, PortNb},
+};
 
 const MAX_REPETITIONS: u8 = 99;
 const MAX_REPETITIONS_EXCEEDED: &str = ">99";
 const STORAGE_MSG_LIST_DIR: &str = "msg_list_dir";
+const STORAGE_MSG_LIST_DISPLAY_PARSED: &str = "msg_list_must_display_parsed";
+const STORAGE_MSG_LIST_DISPLAY_RAW: &str = "msg_list_must_display_raw";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -23,7 +28,7 @@ pub enum Error {
 #[cfg_attr(feature = "save", derive(serde::Serialize))]
 pub struct MsgParseResult {
     #[cfg_attr(feature = "save", serde(rename = "timestamp"))]
-    ts_str: Arc<str>,
+    ts_str: String,
 
     #[cfg_attr(feature = "save", serde(rename = "port"))]
     port_nb: PortNb,
@@ -33,13 +38,23 @@ pub struct MsgParseResult {
     is_err: bool,
 
     #[cfg_attr(feature = "save", serde(rename = "parsed"))]
-    res_str: Arc<str>,
+    parsed_res_str: String,
 
-    buffer: Buffer,
+    #[cfg_attr(feature = "save", serde(skip))]
+    raw_str: String,
+
+    #[cfg_attr(feature = "save", serde(rename = "raw"))]
+    raw: Buffer,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct Buffer(Arc<[u8]>);
+
+impl Buffer {
+    pub fn display(&self) -> bytes::Displayable {
+        bytes::Displayable::from(self.0.as_ref())
+    }
+}
 
 impl PartialEq<[u8]> for Buffer {
     fn eq(&self, other: &[u8]) -> bool {
@@ -53,24 +68,11 @@ impl From<Arc<[u8]>> for Buffer {
     }
 }
 
-fn write_data(w: &mut dyn fmt::Write, data: &[u8]) -> std::fmt::Result {
-    write!(w, "(hex)")?;
-    for val in data {
-        write!(w, " {val:02x}")?;
-    }
-
-    Ok(())
-}
-
 /// Serialize as hex printable values.
 #[cfg(feature = "save")]
 impl<'a> serde::Serialize for Buffer {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut data_str = String::new();
-        write_data(&mut data_str, self.0.as_ref())
-            .map_err(|_| serde::ser::Error::custom("Couldn't write `buffer` as string"))?;
-
-        serializer.serialize_str(&data_str)
+        serializer.serialize_str(&format!("(hex) {}", self.display()))
     }
 }
 
@@ -80,7 +82,7 @@ impl PartialEq<midi::msg::Result> for MsgParseResult {
             Ok(ok) => &ok.origin,
             Err(err) => &err.origin,
         };
-        self.port_nb == other_origin.port_nb && self.buffer == *other_origin.buffer
+        self.port_nb == other_origin.port_nb && self.raw == *other_origin.buffer
     }
 }
 
@@ -88,26 +90,34 @@ impl From<midi::msg::Result> for MsgParseResult {
     fn from(res: midi::msg::Result) -> Self {
         match res {
             Ok(ok) => {
-                let mut res_str = String::new();
-                write_midi_msg(&mut res_str, &ok.msg).unwrap();
+                let mut parsed_str = String::new();
+                write_midi_msg(&mut parsed_str, &ok.msg).unwrap();
+
+                let raw: Buffer = ok.origin.buffer.into();
 
                 Self {
-                    ts_str: format!("{}", ok.origin.ts).into(),
+                    ts_str: format!("{}", ok.origin.ts),
                     port_nb: ok.origin.port_nb,
                     repetitions: 1,
-                    res_str: res_str.into(),
-                    buffer: ok.origin.buffer.into(),
+                    parsed_res_str: parsed_str,
+                    raw_str: format!("{}", raw.display()),
+                    raw,
                     is_err: false,
                 }
             }
-            Err(err) => Self {
-                ts_str: format!("{}", err.origin.ts).into(),
-                port_nb: err.origin.port_nb,
-                repetitions: 1,
-                res_str: format!("{}", err.err).into(),
-                buffer: err.origin.buffer.into(),
-                is_err: true,
-            },
+            Err(err) => {
+                let raw: Buffer = err.origin.buffer.into();
+
+                Self {
+                    ts_str: format!("{}", err.origin.ts),
+                    port_nb: err.origin.port_nb,
+                    repetitions: 1,
+                    parsed_res_str: format!("{}", err.err),
+                    raw_str: format!("{}", raw.display()),
+                    raw,
+                    is_err: true,
+                }
+            }
         }
     }
 }
@@ -130,6 +140,8 @@ impl Status {
 pub struct MsgListPanel {
     pub list: Vec<Arc<MsgParseResult>>,
     follows_cursor: bool,
+    must_display_parsed: bool,
+    must_display_raw: bool,
     err_tx: channel::Sender<super::app::Error>,
     msg_list_dir: Arc<Mutex<PathBuf>>,
 }
@@ -139,6 +151,8 @@ impl MsgListPanel {
         Self {
             list: Vec::new(),
             follows_cursor: true,
+            must_display_parsed: true,
+            must_display_raw: false,
             err_tx,
             msg_list_dir: Arc::new(Mutex::new(PathBuf::from("."))),
         }
@@ -154,6 +168,14 @@ impl MsgListPanel {
                     if ui.button("Clear").clicked() {
                         self.list.clear();
                     }
+
+                    ui.separator();
+
+                    ui.checkbox(&mut self.must_display_parsed, "Parsed");
+                    ui.checkbox(&mut self.must_display_raw, "Raw");
+
+                    ui.separator();
+
                     #[cfg(feature = "save")]
                     if ui.button("Save").clicked() {
                         self.save_list();
@@ -163,54 +185,84 @@ impl MsgListPanel {
 
             ui.separator();
             egui::ScrollArea::both().show(ui, |ui| {
-                egui::Grid::new("Msg List").num_columns(4).show(ui, |ui| {
-                    ui.label("Timestamp");
-                    ui.label("Port");
-                    ui.label("Rep.");
-                    ui.label("Message");
-                    ui.end_row();
+                // Adapt grid id otherwise column sizes are kept
+                // between refresh, regardless of the columns added.
+                let mut grid_id = String::from("MSGLIST");
 
-                    ui.separator();
-                    ui.separator();
-                    ui.separator();
-                    ui.separator();
-                    ui.end_row();
+                let mut num_columns = 3;
+                if self.must_display_parsed {
+                    num_columns += 1;
+                    grid_id += "P";
+                }
+                if self.must_display_raw {
+                    num_columns += 1;
+                    grid_id += "R";
+                }
 
-                    for msg in self.list.iter() {
-                        let row_color = match msg.port_nb {
-                            midi::PortNb::One => egui::Color32::from_rgb(0, 0, 0x64),
-                            midi::PortNb::Two => egui::Color32::from_rgb(0, 0x48, 0),
-                        };
-
-                        let _ = ui.selectable_label(false, msg.ts_str.as_ref());
-
-                        let _ = ui.selectable_label(
-                            false,
-                            egui::RichText::new(msg.port_nb.as_char())
-                                .color(egui::Color32::WHITE)
-                                .background_color(row_color),
-                        );
-
-                        let repetitions: egui::WidgetText = if msg.repetitions == 1 {
-                            "".into()
-                        } else if msg.repetitions > MAX_REPETITIONS {
-                            MAX_REPETITIONS_EXCEEDED.into()
-                        } else {
-                            format!("x{}", msg.repetitions).into()
-                        };
-                        let _ = ui.selectable_label(false, repetitions);
-
-                        let msg_txt =
-                            egui::RichText::new(msg.res_str.as_ref()).color(egui::Color32::WHITE);
-                        let msg_txt = if msg.is_err {
-                            msg_txt.background_color(egui::Color32::DARK_RED)
-                        } else {
-                            msg_txt.background_color(row_color)
-                        };
-                        let _ = ui.selectable_label(false, msg_txt);
+                egui::Grid::new(grid_id)
+                    .num_columns(num_columns)
+                    .show(ui, |ui| {
+                        ui.label("Timestamp");
+                        ui.label("Port");
+                        ui.label("Rep.");
+                        if self.must_display_parsed {
+                            ui.label("Parsed msg");
+                        }
+                        if self.must_display_raw {
+                            ui.label("Raw msg (hex)");
+                        }
                         ui.end_row();
-                    }
-                });
+
+                        for _ in 0..num_columns {
+                            ui.separator();
+                        }
+                        ui.end_row();
+
+                        for msg in self.list.iter() {
+                            let row_color = match msg.port_nb {
+                                midi::PortNb::One => egui::Color32::from_rgb(0, 0, 0x64),
+                                midi::PortNb::Two => egui::Color32::from_rgb(0, 0x48, 0),
+                            };
+
+                            let _ = ui.selectable_label(false, &msg.ts_str);
+
+                            let _ = ui.selectable_label(
+                                false,
+                                egui::RichText::new(msg.port_nb.as_char())
+                                    .color(egui::Color32::WHITE)
+                                    .background_color(row_color),
+                            );
+
+                            let repetitions: egui::WidgetText = if msg.repetitions == 1 {
+                                "".into()
+                            } else if msg.repetitions > MAX_REPETITIONS {
+                                MAX_REPETITIONS_EXCEEDED.into()
+                            } else {
+                                format!("x{}", msg.repetitions).into()
+                            };
+                            let _ = ui.selectable_label(false, repetitions);
+
+                            if self.must_display_parsed {
+                                let msg_txt = egui::RichText::new(&msg.parsed_res_str)
+                                    .color(egui::Color32::WHITE);
+                                let msg_txt = if msg.is_err {
+                                    msg_txt.background_color(egui::Color32::DARK_RED)
+                                } else {
+                                    msg_txt.background_color(row_color)
+                                };
+                                let _ = ui.selectable_label(false, msg_txt);
+                            }
+
+                            if self.must_display_raw {
+                                let raw_txt = egui::RichText::new(&msg.raw_str)
+                                    .color(egui::Color32::WHITE)
+                                    .background_color(row_color);
+                                let _ = ui.selectable_label(false, raw_txt);
+                            }
+
+                            ui.end_row();
+                        }
+                    });
 
                 if self.follows_cursor {
                     ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
@@ -224,6 +276,12 @@ impl MsgListPanel {
             if let Some(msg_list_dir) = storage.get_string(STORAGE_MSG_LIST_DIR) {
                 *self.msg_list_dir.lock().unwrap() = msg_list_dir.into();
             }
+            if let Some(display_parsed) = storage.get_string(STORAGE_MSG_LIST_DISPLAY_PARSED) {
+                self.must_display_parsed = display_parsed == "true";
+            }
+            if let Some(display_raw) = storage.get_string(STORAGE_MSG_LIST_DISPLAY_RAW) {
+                self.must_display_raw = display_raw == "true";
+            }
         }
     }
 
@@ -231,6 +289,16 @@ impl MsgListPanel {
         storage.set_string(
             STORAGE_MSG_LIST_DIR,
             self.msg_list_dir.lock().unwrap().display().to_string(),
+        );
+
+        storage.set_string(
+            STORAGE_MSG_LIST_DISPLAY_PARSED,
+            format!("{}", self.must_display_parsed),
+        );
+
+        storage.set_string(
+            STORAGE_MSG_LIST_DISPLAY_RAW,
+            format!("{}", self.must_display_raw),
         );
     }
 }
@@ -530,12 +598,18 @@ fn write_sysex_msg(w: &mut dyn fmt::Write, msg: &midi_msg::SystemExclusiveMsg) -
     use midi_msg::SystemExclusiveMsg::*;
     match msg {
         Commercial { id, data } => {
-            write!(w, "{id:?} data ")?;
-            write_data(w, data)
+            write!(
+                w,
+                "{id:?} data {}",
+                bytes::Displayable::from(data.as_slice())
+            )
         }
         NonCommercial { data } => {
-            write!(w, "Non-com. data ")?;
-            write_data(w, data)
+            write!(
+                w,
+                "Non-com. data {}",
+                bytes::Displayable::from(data.as_slice())
+            )
         }
         UniversalRealTime { device, msg } => {
             write!(w, "UniRT {device:?} ")?;
