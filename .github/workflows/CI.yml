@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  min-deps:
+    name: "Minimum dependencies"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install deps
+      run: |
+        sudo apt update
+        sudo apt upgrade
+        sudo apt install --no-install-recommends -y libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev libspeechd-dev libxkbcommon-dev
+    - name: Build with no default features
+      run: cargo test --verbose --no-default-features
+
+  default-deps:
+    name: "Default dependencies"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install deps
+      run: |
+        sudo apt update
+        sudo apt upgrade
+        sudo apt install --no-install-recommends -y libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev
+    - name: Build with default features
+      run: cargo build --verbose
+
+  all-deps:
+    name: "All dependencies"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install deps
+      run: |
+        sudo apt update
+        sudo apt upgrade
+        sudo apt install --no-install-recommends -y libasound2-dev libjack-dev libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev
+    - name: fmt
+      run: cargo fmt -- --check
+    - name: clippy
+      run: cargo clippy --tests
+    - name: Build with all features
+      run: cargo test --verbose --all-features
