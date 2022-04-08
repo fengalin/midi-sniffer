@@ -142,6 +142,7 @@ pub struct MsgListPanel {
     follows_cursor: bool,
     must_display_parsed: bool,
     must_display_raw: bool,
+    #[cfg_attr(not(feature = "save"), allow(dead_code))]
     err_tx: channel::Sender<super::app::Error>,
     msg_list_dir: Arc<Mutex<PathBuf>>,
 }
@@ -174,11 +175,12 @@ impl MsgListPanel {
                     ui.checkbox(&mut self.must_display_parsed, "Parsed");
                     ui.checkbox(&mut self.must_display_raw, "Raw");
 
-                    ui.separator();
-
                     #[cfg(feature = "save")]
-                    if ui.button("Save").clicked() {
-                        self.save_list();
+                    {
+                        ui.separator();
+                        if ui.button("Save").clicked() {
+                            self.save_list();
+                        }
                     }
                 });
             });
