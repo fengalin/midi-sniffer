@@ -3,7 +3,7 @@
 `midi-sniffer` is portable GUI to inspect MIDI messages on up to 2 ports.
 It's usable, but still in early development.
 
-![midi-sniffer UI](assets/screenshot_20220323.png "midi-sniffer UI")
+![midi-sniffer UI](assets/screenshot_20220408.png "midi-sniffer UI")
 
 ## Build
 
