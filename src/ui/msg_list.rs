@@ -235,10 +235,10 @@ impl MsgListPanel {
 
                             let repetitions: egui::WidgetText = if msg.repetitions == 1 {
                                 "".into()
-                            } else if msg.repetitions > MAX_REPETITIONS {
-                                MAX_REPETITIONS_EXCEEDED.into()
-                            } else {
+                            } else if msg.repetitions <= MAX_REPETITIONS {
                                 format!("x{}", msg.repetitions).into()
+                            } else {
+                                MAX_REPETITIONS_EXCEEDED.into()
                             };
                             let _ = ui.selectable_label(false, repetitions);
 
@@ -310,7 +310,7 @@ impl MsgListPanel {
 
         match self.list.last_mut() {
             Some(last) if last.as_ref() == &msg => {
-                if last.repetitions < MAX_REPETITIONS {
+                if last.repetitions <= MAX_REPETITIONS {
                     Arc::make_mut(last).repetitions += 1;
                     status.updated();
                 }
