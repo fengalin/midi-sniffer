@@ -201,6 +201,7 @@ impl MsgListPanel {
 
                 egui::Grid::new(grid_id)
                     .num_columns(num_columns)
+                    .striped(true)
                     .show(ui, |ui| {
                         ui.label("Timestamp");
                         ui.label("Port");
