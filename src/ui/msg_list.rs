@@ -187,16 +187,16 @@ impl MsgListPanel {
             egui::ScrollArea::both().show(ui, |ui| {
                 // Adapt grid id otherwise column sizes are kept
                 // between refresh, regardless of the columns added.
-                let mut grid_id = String::from("MSGLIST");
+                let mut grid_id = String::from("MsgLst");
 
                 let mut num_columns = 3;
                 if self.must_display_parsed {
                     num_columns += 1;
-                    grid_id += "P";
+                    grid_id.push('P');
                 }
                 if self.must_display_raw {
                     num_columns += 1;
-                    grid_id += "R";
+                    grid_id.push('R');
                 }
 
                 egui::Grid::new(grid_id)
