@@ -1,5 +1,5 @@
 use crossbeam_channel as channel;
-use eframe::epi;
+use eframe::egui;
 use std::{
     ops::ControlFlow,
     sync::{Arc, Mutex},
@@ -14,6 +14,7 @@ pub struct Spawner {
     pub msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
     pub client_name: Arc<str>,
     pub ports_panel: Arc<Mutex<super::PortsPanel>>,
+    pub egui_ctx: egui::Context,
 }
 
 impl Spawner {
@@ -25,6 +26,7 @@ impl Spawner {
                 self.msg_list_panel,
                 self.client_name,
                 self.ports_panel,
+                self.egui_ctx,
             );
         })
     }
@@ -40,7 +42,7 @@ struct Controller {
     ports_panel: Arc<Mutex<super::PortsPanel>>,
 
     must_repaint: bool,
-    frame: Option<epi::Frame>,
+    egui_ctx: egui::Context,
 }
 
 impl Controller {
@@ -50,6 +52,7 @@ impl Controller {
         msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
         client_name: Arc<str>,
         ports_panel: Arc<Mutex<super::PortsPanel>>,
+        egui_ctx: egui::Context,
     ) -> Result<(), ()> {
         let midi_ports = midi::Ports::try_new(client_name).map_err(|err| {
             log::error!("Error creating Controller: {}", err);
@@ -68,7 +71,7 @@ impl Controller {
             ports_panel,
 
             must_repaint: false,
-            frame: None,
+            egui_ctx,
         }
         .run_loop(req_rx, midi_rx);
 
@@ -82,9 +85,6 @@ impl Controller {
             Disconnect(port_nb) => self.disconnect(port_nb)?,
             RefreshPorts => self.refresh_ports()?,
             Shutdown => return Ok(ControlFlow::Break(())),
-            HaveFrame(egui_frame) => {
-                self.frame = Some(egui_frame);
-            }
         }
 
         Ok(ControlFlow::Continue(()))
@@ -168,9 +168,7 @@ impl Controller {
             }
 
             if self.must_repaint {
-                if let Some(ref frame) = self.frame {
-                    frame.request_repaint();
-                }
+                self.egui_ctx.request_repaint();
                 self.must_repaint = false;
             }
         }

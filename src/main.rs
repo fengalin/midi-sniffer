@@ -12,18 +12,10 @@ fn main() {
         .filter_level(log::LevelFilter::Debug)
         .init();
 
-    match ui::App::try_new(APP_NAME).map(|ui| {
-        let options = eframe::NativeOptions::default();
-        eframe::run_native(Box::new(ui), options);
-    }) {
-        Ok(()) => log::info!("Exiting"),
-        Err(err) => {
-            use std::error::Error;
-
-            log::error!("Error: {}", err);
-            if let Some(source) = err.source() {
-                log::error!("\t{}", source)
-            }
-        }
-    }
+    let options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "midi-sniffer",
+        options,
+        Box::new(|cc| Box::new(ui::App::new(APP_NAME, cc))),
+    );
 }

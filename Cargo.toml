@@ -12,7 +12,7 @@ edition = "2021"
 
 [dependencies]
 crossbeam-channel = "0.5"
-eframe = { version = "0.17", features = ["persistence"] }
+eframe = { version = "0.18", features = ["persistence"] }
 env_logger = "0.9"
 log = { version = "0.4", features = ["release_max_level_debug"] }
 midi-msg = "0.3.0"
@@ -29,3 +29,6 @@ default = ["save"]
 
 jack = ["midir/jack"]
 save = ["rfd", "ron", "serde"]
+
+[profile.release]
+lto = true

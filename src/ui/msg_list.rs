@@ -1,10 +1,9 @@
 use crossbeam_channel as channel;
-use eframe::{egui, epi};
-use std::{
-    fmt,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use eframe::{self, egui};
+use std::{fmt, sync::Arc};
+
+#[cfg(feature = "save")]
+use std::{path::PathBuf, sync::Mutex};
 
 use crate::{
     bytes,
@@ -13,9 +12,11 @@ use crate::{
 
 const MAX_REPETITIONS: u8 = 99;
 const MAX_REPETITIONS_EXCEEDED: &str = ">99";
-const STORAGE_MSG_LIST_DIR: &str = "msg_list_dir";
 const STORAGE_MSG_LIST_DISPLAY_PARSED: &str = "msg_list_must_display_parsed";
 const STORAGE_MSG_LIST_DISPLAY_RAW: &str = "msg_list_must_display_raw";
+
+#[cfg(feature = "save")]
+const STORAGE_MSG_LIST_DIR: &str = "msg_list_dir";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -144,18 +145,40 @@ pub struct MsgListPanel {
     must_display_raw: bool,
     #[cfg_attr(not(feature = "save"), allow(dead_code))]
     err_tx: channel::Sender<super::app::Error>,
+    #[cfg(feature = "save")]
     msg_list_dir: Arc<Mutex<PathBuf>>,
 }
 
 impl MsgListPanel {
-    pub fn new(err_tx: channel::Sender<super::app::Error>) -> Self {
+    pub fn new(err_tx: channel::Sender<super::app::Error>, cc: &eframe::CreationContext) -> Self {
+        let mut must_display_parsed = true;
+        let mut must_display_raw = false;
+
+        #[cfg(feature = "save")]
+        let mut msg_list_dir = PathBuf::from(".");
+
+        if let Some(storage) = cc.storage {
+            if let Some(display_parsed) = storage.get_string(STORAGE_MSG_LIST_DISPLAY_PARSED) {
+                must_display_parsed = display_parsed == "true";
+            }
+            if let Some(display_raw) = storage.get_string(STORAGE_MSG_LIST_DISPLAY_RAW) {
+                must_display_raw = display_raw == "true";
+            }
+
+            #[cfg(feature = "save")]
+            if let Some(dir) = storage.get_string(STORAGE_MSG_LIST_DIR) {
+                msg_list_dir = dir.into();
+            }
+        }
+
         Self {
             list: Vec::new(),
             follows_cursor: true,
-            must_display_parsed: true,
-            must_display_raw: false,
+            must_display_parsed,
+            must_display_raw,
             err_tx,
-            msg_list_dir: Arc::new(Mutex::new(PathBuf::from("."))),
+            #[cfg(feature = "save")]
+            msg_list_dir: Arc::new(Mutex::new(msg_list_dir)),
         }
     }
 }
@@ -274,26 +297,7 @@ impl MsgListPanel {
         });
     }
 
-    pub fn setup(&mut self, storage: Option<&dyn epi::Storage>) {
-        if let Some(storage) = storage {
-            if let Some(msg_list_dir) = storage.get_string(STORAGE_MSG_LIST_DIR) {
-                *self.msg_list_dir.lock().unwrap() = msg_list_dir.into();
-            }
-            if let Some(display_parsed) = storage.get_string(STORAGE_MSG_LIST_DISPLAY_PARSED) {
-                self.must_display_parsed = display_parsed == "true";
-            }
-            if let Some(display_raw) = storage.get_string(STORAGE_MSG_LIST_DISPLAY_RAW) {
-                self.must_display_raw = display_raw == "true";
-            }
-        }
-    }
-
-    pub fn save(&mut self, storage: &mut dyn epi::Storage) {
-        storage.set_string(
-            STORAGE_MSG_LIST_DIR,
-            self.msg_list_dir.lock().unwrap().display().to_string(),
-        );
-
+    pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(
             STORAGE_MSG_LIST_DISPLAY_PARSED,
             format!("{}", self.must_display_parsed),
@@ -302,6 +306,12 @@ impl MsgListPanel {
         storage.set_string(
             STORAGE_MSG_LIST_DISPLAY_RAW,
             format!("{}", self.must_display_raw),
+        );
+
+        #[cfg(feature = "save")]
+        storage.set_string(
+            STORAGE_MSG_LIST_DIR,
+            self.msg_list_dir.lock().unwrap().display().to_string(),
         );
     }
 }

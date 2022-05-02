@@ -1,4 +1,4 @@
-use eframe::{egui, epi};
+use eframe::{self, egui};
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 
@@ -99,15 +99,30 @@ pub enum Response {
     CheckingList,
 }
 
+#[derive(Default)]
 pub struct PortsPanel {
     pub ports: DirectionalPorts,
 }
 
 impl PortsPanel {
-    pub fn new() -> Self {
-        Self {
-            ports: DirectionalPorts::default(),
+    pub fn setup(storage: Option<&dyn eframe::Storage>) -> impl Iterator<Item = Response> {
+        use Response::*;
+
+        let mut resp = Vec::new();
+        if let Some(storage) = storage {
+            if let Some(port) = storage.get_string(STORAGE_PORT_1) {
+                if port != DISCONNECTED.as_ref() {
+                    resp.push(Connect((midi::PortNb::One, port.into())));
+                }
+            }
+            if let Some(port) = storage.get_string(STORAGE_PORT_2) {
+                if port != DISCONNECTED.as_ref() {
+                    resp.push(Connect((midi::PortNb::Two, port.into())));
+                }
+            }
         }
+
+        resp.into_iter()
     }
 
     #[must_use]
@@ -153,27 +168,7 @@ impl PortsPanel {
         }
     }
 
-    pub fn setup(&mut self, storage: Option<&dyn epi::Storage>) -> impl Iterator<Item = Response> {
-        use Response::*;
-
-        let mut resp = Vec::new();
-        if let Some(storage) = storage {
-            if let Some(port) = storage.get_string(STORAGE_PORT_1) {
-                if port != DISCONNECTED.as_ref() {
-                    resp.push(Connect((midi::PortNb::One, port.into())));
-                }
-            }
-            if let Some(port) = storage.get_string(STORAGE_PORT_2) {
-                if port != DISCONNECTED.as_ref() {
-                    resp.push(Connect((midi::PortNb::Two, port.into())));
-                }
-            }
-        }
-
-        resp.into_iter()
-    }
-
-    pub fn save(&mut self, storage: &mut dyn epi::Storage) {
+    pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(
             STORAGE_PORT_1,
             self.ports.cur[midi::PortNb::One.idx()].to_string(),

@@ -1,5 +1,5 @@
 use crossbeam_channel as channel;
-use eframe::{egui, epi};
+use eframe::{self, egui};
 use std::sync::{Arc, Mutex};
 
 use super::{controller, Dispatcher};
@@ -23,7 +23,6 @@ pub enum Error {
 pub enum Request {
     Connect((midi::PortNb, Arc<str>)),
     Disconnect(midi::PortNb),
-    HaveFrame(epi::Frame),
     RefreshPorts,
     Shutdown,
 }
@@ -38,12 +37,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn try_new(client_name: &str) -> Result<Self, Error> {
+    pub fn new(client_name: &str, cc: &eframe::CreationContext) -> Self {
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
         let (err_tx, err_rx) = channel::unbounded();
         let (req_tx, req_rx) = channel::unbounded();
 
-        let ports_panel = Arc::new(Mutex::new(super::PortsPanel::new()));
-        let msg_list_panel = Arc::new(Mutex::new(super::MsgListPanel::new(err_tx.clone())));
+        let ports_panel = Arc::new(Mutex::new(super::PortsPanel::default()));
+        let msg_list_panel = Arc::new(Mutex::new(super::MsgListPanel::new(err_tx.clone(), cc)));
 
         let controller_thread = controller::Spawner {
             req_rx,
@@ -51,26 +52,29 @@ impl App {
             msg_list_panel: msg_list_panel.clone(),
             client_name: Arc::from(client_name),
             ports_panel: ports_panel.clone(),
+            egui_ctx: cc.egui_ctx.clone(),
         }
         .spawn();
 
-        Ok(Self {
+        let mut this = Self {
             msg_list_panel,
             req_tx,
             err_rx,
             ports_panel,
             last_err: None,
             controller_thread: Some(controller_thread),
-        })
+        };
+
+        for evt in super::PortsPanel::setup(cc.storage) {
+            Dispatcher::<super::PortsPanel>::handle(&mut this, Some(evt));
+        }
+
+        this
     }
 }
 
-impl epi::App for App {
-    fn name(&self) -> &str {
-        "midi-sniffer"
-    }
-
-    fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("top-area").show(ctx, |ui| {
             ui.add_space(10f32);
             ui.heading("MIDI Sniffer");
@@ -108,24 +112,7 @@ impl epi::App for App {
         });
     }
 
-    fn setup(
-        &mut self,
-        ctx: &egui::Context,
-        frame: &epi::Frame,
-        storage: Option<&dyn epi::Storage>,
-    ) {
-        ctx.set_visuals(egui::Visuals::dark());
-        self.have_frame(frame.clone());
-
-        let resps = self.ports_panel.lock().unwrap().setup(storage);
-        for resp in resps {
-            Dispatcher::<super::PortsPanel>::handle(self, Some(resp));
-        }
-
-        self.msg_list_panel.lock().unwrap().setup(storage);
-    }
-
-    fn save(&mut self, storage: &mut dyn epi::Storage) {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.ports_panel.lock().unwrap().save(storage);
         self.msg_list_panel.lock().unwrap().save(storage);
         self.clear_last_err();
@@ -136,7 +123,7 @@ impl epi::App for App {
         false
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: &eframe::glow::Context) {
         log::info!("Shutting down");
         self.shutdown();
     }
@@ -151,10 +138,6 @@ impl App {
                 let _ = controller_thread.join();
             }
         }
-    }
-
-    pub fn have_frame(&self, frame: epi::Frame) {
-        self.req_tx.send(Request::HaveFrame(frame)).unwrap();
     }
 
     pub fn send_req(&mut self, req: Request) {
