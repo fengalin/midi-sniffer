@@ -1,5 +1,6 @@
 use crossbeam_channel as channel;
 use eframe::{self, egui};
+use egui_extras::{Size, TableBuilder};
 use std::{fmt, sync::Arc};
 
 #[cfg(feature = "save")]
@@ -209,91 +210,102 @@ impl MsgListPanel {
             });
 
             ui.separator();
-            egui::ScrollArea::both().show(ui, |ui| {
-                // Adapt grid id otherwise column sizes are kept
-                // between refresh, regardless of the columns added.
-                let mut grid_id = String::from("MsgLst");
 
-                let mut num_columns = 3;
-                if self.must_display_parsed {
-                    num_columns += 1;
-                    grid_id.push('P');
-                }
-                if self.must_display_raw {
-                    num_columns += 1;
-                    grid_id.push('R');
-                }
+            let mut table_builder = TableBuilder::new(ui)
+                .striped(true)
+                .column(Size::exact(80.0))
+                .column(Size::exact(25.0))
+                .column(Size::exact(30.0));
 
-                egui::Grid::new(grid_id)
-                    .num_columns(num_columns)
-                    .striped(true)
-                    .show(ui, |ui| {
+            if self.must_display_parsed {
+                table_builder = table_builder.column(Size::remainder());
+            }
+            if self.must_display_raw {
+                table_builder = table_builder.column(Size::remainder());
+            }
+
+            table_builder
+                .header(25.0, |mut header| {
+                    header.col(|ui| {
                         ui.label("Timestamp");
+                    });
+                    header.col(|ui| {
                         ui.label("Port");
+                    });
+                    header.col(|ui| {
                         ui.label("Rep.");
-                        if self.must_display_parsed {
+                    });
+                    if self.must_display_parsed {
+                        header.col(|ui| {
                             ui.label("Parsed msg");
-                        }
-                        if self.must_display_raw {
+                        });
+                    }
+                    if self.must_display_raw {
+                        header.col(|ui| {
                             ui.label("Raw msg (hex)");
-                        }
-                        ui.end_row();
-
-                        for _ in 0..num_columns {
-                            ui.separator();
-                        }
-                        ui.end_row();
-
-                        for msg in self.list.iter() {
+                        });
+                    }
+                })
+                .body(|mut body| {
+                    let len = self.list.len();
+                    for (idx, msg) in self.list.iter().enumerate() {
+                        body.row(20.0, |mut row| {
                             let row_color = match msg.port_nb {
                                 midi::PortNb::One => egui::Color32::from_rgb(0, 0, 0x64),
                                 midi::PortNb::Two => egui::Color32::from_rgb(0, 0x48, 0),
                             };
 
-                            let _ = ui.selectable_label(false, &msg.ts_str);
+                            row.col(|ui| {
+                                let _ = ui.selectable_label(false, &msg.ts_str);
+                                if self.follows_cursor && idx + 1 == len {
+                                    ui.scroll_to_cursor(None);
+                                }
+                            });
 
-                            let _ = ui.selectable_label(
-                                false,
-                                egui::RichText::new(msg.port_nb.as_char())
-                                    .color(egui::Color32::WHITE)
-                                    .background_color(row_color),
-                            );
+                            row.col(|ui| {
+                                let _ = ui.selectable_label(
+                                    false,
+                                    egui::RichText::new(msg.port_nb.as_char())
+                                        .color(egui::Color32::WHITE)
+                                        .background_color(row_color),
+                                );
+                            });
 
-                            let repetitions: egui::WidgetText = if msg.repetitions == 1 {
-                                "".into()
-                            } else if msg.repetitions <= MAX_REPETITIONS {
-                                format!("x{}", msg.repetitions).into()
-                            } else {
-                                MAX_REPETITIONS_EXCEEDED.into()
-                            };
-                            let _ = ui.selectable_label(false, repetitions);
+                            row.col(|ui| {
+                                let repetitions: egui::WidgetText = if msg.repetitions == 1 {
+                                    "".into()
+                                } else if msg.repetitions <= MAX_REPETITIONS {
+                                    format!("x{}", msg.repetitions).into()
+                                } else {
+                                    MAX_REPETITIONS_EXCEEDED.into()
+                                };
+                                let _ = ui.selectable_label(false, repetitions);
+                            });
 
                             if self.must_display_parsed {
-                                let msg_txt = egui::RichText::new(&msg.parsed_res_str)
-                                    .color(egui::Color32::WHITE);
-                                let msg_txt = if msg.is_err {
-                                    msg_txt.background_color(egui::Color32::DARK_RED)
-                                } else {
-                                    msg_txt.background_color(row_color)
-                                };
-                                let _ = ui.selectable_label(false, msg_txt);
+                                row.col(|ui| {
+                                    let msg_txt = egui::RichText::new(&msg.parsed_res_str)
+                                        .color(egui::Color32::WHITE);
+                                    let msg_txt = if msg.is_err {
+                                        msg_txt.background_color(egui::Color32::DARK_RED)
+                                    } else {
+                                        msg_txt.background_color(row_color)
+                                    };
+                                    let _ = ui.selectable_label(false, msg_txt);
+                                });
                             }
 
                             if self.must_display_raw {
-                                let raw_txt = egui::RichText::new(&msg.raw_str)
-                                    .color(egui::Color32::WHITE)
-                                    .background_color(row_color);
-                                let _ = ui.selectable_label(false, raw_txt);
+                                row.col(|ui| {
+                                    let raw_txt = egui::RichText::new(&msg.raw_str)
+                                        .color(egui::Color32::WHITE)
+                                        .background_color(row_color);
+                                    let _ = ui.selectable_label(false, raw_txt);
+                                });
                             }
-
-                            ui.end_row();
-                        }
-                    });
-
-                if self.follows_cursor {
-                    ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-                }
-            })
+                        });
+                    }
+                });
         });
     }
 
