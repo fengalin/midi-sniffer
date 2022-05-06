@@ -5,21 +5,6 @@ use std::sync::{Arc, Mutex};
 use super::{controller, Dispatcher};
 use crate::midi;
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{}", .0)]
-    Port(#[from] midi::port::Error),
-
-    #[error("{}", .0)]
-    Midi(#[from] super::port::Error),
-
-    #[error("Failed to parse MIDI Message")]
-    Parse(#[from] crate::midi::msg::Error),
-
-    #[error("{}", .0)]
-    MsgList(#[from] super::msg_list::Error),
-}
-
 pub enum Request {
     Connect((midi::PortNb, Arc<str>)),
     Disconnect(midi::PortNb),
@@ -30,9 +15,9 @@ pub enum Request {
 pub struct App {
     msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
     req_tx: channel::Sender<Request>,
-    err_rx: channel::Receiver<Error>,
+    err_rx: channel::Receiver<anyhow::Error>,
     ports_panel: Arc<Mutex<super::PortsPanel>>,
-    last_err: Option<Error>,
+    last_err: Option<anyhow::Error>,
     controller_thread: Option<std::thread::JoinHandle<()>>,
 }
 

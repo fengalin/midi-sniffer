@@ -19,13 +19,6 @@ const STORAGE_MSG_LIST_DISPLAY_RAW: &str = "msg_list_must_display_raw";
 #[cfg(feature = "save")]
 const STORAGE_MSG_LIST_DIR: &str = "msg_list_dir";
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[cfg(feature = "save")]
-    #[error("Failed to save message list: {}", .0)]
-    Save(#[from] std::io::Error),
-}
-
 #[derive(Clone)]
 #[cfg_attr(feature = "save", derive(serde::Serialize))]
 pub struct MsgParseResult {
@@ -145,13 +138,13 @@ pub struct MsgListPanel {
     must_display_parsed: bool,
     must_display_raw: bool,
     #[cfg_attr(not(feature = "save"), allow(dead_code))]
-    err_tx: channel::Sender<super::app::Error>,
+    err_tx: channel::Sender<anyhow::Error>,
     #[cfg(feature = "save")]
     msg_list_dir: Arc<Mutex<PathBuf>>,
 }
 
 impl MsgListPanel {
-    pub fn new(err_tx: channel::Sender<super::app::Error>, cc: &eframe::CreationContext) -> Self {
+    pub fn new(err_tx: channel::Sender<anyhow::Error>, cc: &eframe::CreationContext) -> Self {
         let mut must_display_parsed = true;
         let mut must_display_raw = false;
 
@@ -356,6 +349,7 @@ impl MsgListPanel {
         let msg_list = self.list.clone();
         let msg_list_dir = self.msg_list_dir.clone();
         std::thread::spawn(move || {
+            use anyhow::Context;
             use std::fs;
 
             let file_path = rfd::FileDialog::new()
@@ -365,7 +359,9 @@ impl MsgListPanel {
                 .save_file();
 
             if let Some(file_path) = file_path {
-                match fs::File::create(&file_path) {
+                match fs::File::create(&file_path)
+                    .with_context(|| format!("Couldn't create file {}", file_path.display()))
+                {
                     Ok(file) => {
                         use std::io::{self, Write};
 
@@ -388,8 +384,8 @@ impl MsgListPanel {
                         log::debug!("Saved Midi messages to: {}", file_path.display());
                     }
                     Err(err) => {
-                        log::error!("Couldn't create file {}: {err}", file_path.display());
-                        let _ = err_tx.send(Error::Save(err).into());
+                        log::error!("{err}");
+                        let _ = err_tx.send(err);
                     }
                 }
             }

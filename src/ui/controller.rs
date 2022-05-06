@@ -1,3 +1,4 @@
+use anyhow::Context;
 use crossbeam_channel as channel;
 use eframe::egui;
 use std::{
@@ -10,7 +11,7 @@ use crate::midi;
 
 pub struct Spawner {
     pub req_rx: channel::Receiver<app::Request>,
-    pub err_tx: channel::Sender<app::Error>,
+    pub err_tx: channel::Sender<anyhow::Error>,
     pub msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
     pub client_name: Arc<str>,
     pub ports_panel: Arc<Mutex<super::PortsPanel>>,
@@ -33,7 +34,7 @@ impl Spawner {
 }
 
 struct Controller {
-    err_tx: channel::Sender<app::Error>,
+    err_tx: channel::Sender<anyhow::Error>,
 
     midi_tx: channel::Sender<midi::msg::Origin>,
     msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
@@ -48,16 +49,18 @@ struct Controller {
 impl Controller {
     fn run(
         req_rx: channel::Receiver<app::Request>,
-        err_tx: channel::Sender<app::Error>,
+        err_tx: channel::Sender<anyhow::Error>,
         msg_list_panel: Arc<Mutex<super::MsgListPanel>>,
         client_name: Arc<str>,
         ports_panel: Arc<Mutex<super::PortsPanel>>,
         egui_ctx: egui::Context,
     ) -> Result<(), ()> {
-        let midi_ports = midi::Ports::try_new(client_name).map_err(|err| {
-            log::error!("Error creating Controller: {}", err);
-            let _ = err_tx.send(err.into());
-        })?;
+        let midi_ports = midi::Ports::try_new(client_name)
+            .context("Failed to create Controller")
+            .map_err(|err| {
+                log::error!("{err}");
+                let _ = err_tx.send(err);
+            })?;
 
         let (midi_tx, midi_rx) = channel::unbounded();
 
@@ -78,7 +81,7 @@ impl Controller {
         Ok(())
     }
 
-    fn handle(&mut self, request: app::Request) -> Result<ControlFlow<(), ()>, app::Error> {
+    fn handle(&mut self, request: app::Request) -> anyhow::Result<ControlFlow<(), ()>> {
         use app::Request::*;
         match request {
             Connect((port_nb, port_name)) => self.connect(port_nb, port_name)?,
@@ -90,7 +93,7 @@ impl Controller {
         Ok(ControlFlow::Continue(()))
     }
 
-    fn connect(&mut self, port_nb: midi::PortNb, port_name: Arc<str>) -> Result<(), app::Error> {
+    fn connect(&mut self, port_nb: midi::PortNb, port_name: Arc<str>) -> anyhow::Result<()> {
         let midi_tx = self.midi_tx.clone();
         let callback = move |ts, buf: &[u8]| {
             midi_tx
@@ -104,15 +107,17 @@ impl Controller {
         Ok(())
     }
 
-    fn disconnect(&mut self, port_nb: midi::PortNb) -> Result<(), app::Error> {
+    fn disconnect(&mut self, port_nb: midi::PortNb) -> anyhow::Result<()> {
         self.midi_ports.disconnect(port_nb)?;
         self.refresh_ports()?;
 
         Ok(())
     }
 
-    fn refresh_ports(&mut self) -> Result<(), app::Error> {
-        self.midi_ports.refresh()?;
+    fn refresh_ports(&mut self) -> anyhow::Result<()> {
+        self.midi_ports
+            .refresh()
+            .context("Failed to refresh ports")?;
         self.ports_panel.lock().unwrap().update(&self.midi_ports);
 
         Ok(())

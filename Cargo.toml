@@ -11,6 +11,7 @@ repository = "https://github.com/fengalin/midi-sniffer"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0"
 crossbeam-channel = "0.5"
 eframe = { version = "0.18", features = ["persistence"] }
 egui_extras = "0.18"
